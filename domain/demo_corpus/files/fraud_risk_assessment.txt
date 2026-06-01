@@ -1,0 +1,7 @@
+Fraud Risk Assessment — Q1 2025
+
+Scope: Card-not-present transactions above €500.
+Current fraud loss rate: 0.04% of revenue.
+Top risk: account takeover via credential stuffing.
+Mitigation: deploy velocity rules in fraud engine.
+Next review: Q2 2025.

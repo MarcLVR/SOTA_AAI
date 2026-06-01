@@ -1,0 +1,6 @@
+VendorID,Name,Country,PaymentTerms,LastValidated,Status
+V001,Acme Supplies Ltd,GB,Net30,2021-04-15,Active
+V002,Global Parts GmbH,DE,Net45,2019-11-30,Active
+V003,FastLogistics SA,FR,Net30,2020-08-01,Inactive
+V004,Offshore Solutions,SG,Net60,,Under review
+V005,Local Services Co,IE,Net30,2022-03-10,Active

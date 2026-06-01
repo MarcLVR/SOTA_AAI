@@ -1,0 +1,10 @@
+API Data Contract — Payments Service
+
+Schema: TBD
+Owner: [INSERT team]
+SLA: [INSERT SLA]
+Classification: TBD
+Retention: TBD
+
+DRAFT — DO NOT DISTRIBUTE
+Note: This should be migrated to the standard data contract template.

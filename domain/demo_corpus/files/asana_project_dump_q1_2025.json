@@ -1,0 +1,26 @@
+[
+  {
+    "task_id": "11223344",
+    "name": "Update data retention schedule",
+    "assignee": "alice@company.com",
+    "due_date": "2025-03-31",
+    "status": "in_progress",
+    "last_modified": "2025-04-02"
+  },
+  {
+    "task_id": "55667788",
+    "name": "Migrate legacy BI reports",
+    "assignee": null,
+    "due_date": null,
+    "status": "open",
+    "last_modified": "2023-01-10"
+  },
+  {
+    "task_id": "99001122",
+    "name": "Review ISO 27001:2013 audit findings",
+    "assignee": "bob@company.com",
+    "due_date": "2022-06-01",
+    "status": "open",
+    "last_modified": "2022-05-01"
+  }
+]
