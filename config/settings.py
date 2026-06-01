@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     ollama_model: str = "llama3.2"
     ollama_embed_model: str = "nomic-embed-text"
 
+    # ── LLM provider selection ────────────────────────────────────────────────
+    llm_provider: str = "gemini"                       # default: gemini | groq | ollama
+    gemini_model: str = "gemini-2.5-flash"
+    google_api_key: str | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_api_key: str | None = None
+
     # ── Optional remote fallback ───────────────────────────────────────────────
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None

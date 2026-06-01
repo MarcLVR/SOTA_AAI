@@ -5,6 +5,8 @@ langchain-core>=0.3.0
 langchain-ollama>=0.2.0
 langgraph>=0.2.0
 langgraph-checkpoint-sqlite>=2.0.0
+langchain-google-genai>=2.0.0
+langchain-groq>=0.2.0
 
 # ── RAG / Memory ──────────────────────────────────────────────────────────────
 chromadb>=0.5.0
@@ -17,7 +19,7 @@ unstructured[md]>=0.15.0              # markdown / text ingestion
 mem0ai>=0.1.0                         # Mem0 local mode (no API key required)
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
-duckduckgo-search>=6.0.0              # free web search
+ddgs>=9.0.0                   # free web search
 langchain-experimental>=0.3.0        # PythonREPLTool (kept as reference)
 
 # ── MCP ───────────────────────────────────────────────────────────────────────

@@ -74,7 +74,7 @@ def critic_node(state: AgentState) -> dict:
         logger.info(f"[critic] max revisions ({MAX_REVISIONS}) reached — passing through")
         return {"should_revise": False, "critique": "", "revision_count": revision_count}
 
-    llm = get_llm()
+    llm = get_llm(role="critic")
     structured_llm = llm.with_structured_output(CriticDecision)
 
     messages = [
