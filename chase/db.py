@@ -138,3 +138,98 @@ def upsert_owner(department: str, username: str, telegram_chat_id: int) -> None:
             (department, username, telegram_chat_id),
         )
         conn.commit()
+
+
+# ── Analytics queries (read-only) ────────────────────────────────────────────
+
+def get_dashboard_stats() -> dict:
+    """KPI summary for the Analytics tab."""
+    with _conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT COUNT(*) AS total_runs FROM validation_runs")
+        runs_row = dict(cur.fetchone())
+
+        cur.execute("""
+            SELECT
+                COUNT(*)                                                    AS total,
+                COUNT(*) FILTER (WHERE status = 'pending')                  AS open,
+                COUNT(*) FILTER (WHERE status = 'fixed')                    AS fixed,
+                COUNT(*) FILTER (WHERE status = 'manual')                   AS manual,
+                COUNT(*) FILTER (WHERE status = 'ignored')                  AS ignored
+            FROM findings
+        """)
+        f = dict(cur.fetchone())
+
+    total    = f["total"]  or 0
+    resolved = (f["fixed"] or 0) + (f["manual"] or 0)
+    fix_rate = round(resolved / total * 100, 1) if total else 0.0
+    return {
+        "total_runs":     runs_row["total_runs"],
+        "total_findings": total,
+        "open":           f["open"]    or 0,
+        "fixed":          f["fixed"]   or 0,
+        "manual":         f["manual"]  or 0,
+        "ignored":        f["ignored"] or 0,
+        "fix_rate":       fix_rate,
+    }
+
+
+def get_findings_by_severity() -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT severity, COUNT(*) AS count
+            FROM findings
+            GROUP BY severity
+            ORDER BY CASE severity WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END
+        """)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_findings_by_status() -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT status, COUNT(*) AS count
+            FROM findings
+            GROUP BY status
+            ORDER BY count DESC
+        """)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_top_rule_codes(limit: int = 10) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT rule_code, COUNT(*) AS count
+            FROM findings
+            WHERE rule_code IS NOT NULL AND rule_code != ''
+            GROUP BY rule_code
+            ORDER BY count DESC
+            LIMIT %s
+        """, (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_findings_by_owner() -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT
+                owner_username,
+                COUNT(*) FILTER (WHERE status = 'pending')                        AS open,
+                COUNT(*) FILTER (WHERE status IN ('fixed', 'manual', 'ignored'))  AS resolved
+            FROM findings
+            WHERE owner_username IS NOT NULL AND owner_username != ''
+            GROUP BY owner_username
+            ORDER BY open DESC
+        """)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_runs_over_time() -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT DATE(started_at) AS day, COUNT(*) AS runs
+            FROM validation_runs
+            WHERE started_at IS NOT NULL
+            GROUP BY day
+            ORDER BY day
+        """)
+        return [{"day": str(r["day"]), "runs": r["runs"]} for r in cur.fetchall()]

@@ -27,6 +27,22 @@ from memory import ingest_documents, get_all_memories
 from guardrails import input_guard
 
 
+# ── chase/db lazy import helper ──────────────────────────────────────────────
+
+def _chase_db():
+    """Lazy-import analytics functions from chase/db.py (not a package)."""
+    import sys, os
+    _chase = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chase")
+    if _chase not in sys.path:
+        sys.path.insert(0, _chase)
+    from db import (
+        get_dashboard_stats, get_findings_by_severity, get_findings_by_status,
+        get_top_rule_codes, get_findings_by_owner, get_runs_over_time,
+    )
+    return (get_dashboard_stats, get_findings_by_severity, get_findings_by_status,
+            get_top_rule_codes, get_findings_by_owner, get_runs_over_time)
+
+
 # ── Graph singleton (Tab 3 only) ─────────────────────────────────────────────
 
 _mcp_tools: list = []
@@ -503,6 +519,157 @@ def new_session() -> str:
 # UI assembly
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Tab 4 — Analytics helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _analytics_kpi_html(s: dict) -> str:
+    fix_color = "#16a34a" if s["fix_rate"] >= 70 else ("#d97706" if s["fix_rate"] >= 40 else "#dc2626")
+    cards = [
+        ("🗂️", str(s["total_runs"]),                      "Validation runs"),
+        ("🔍", str(s["total_findings"]),                   "Total findings"),
+        ("🔴", str(s["open"]),                             "Open"),
+        ("✅", f'{s["fix_rate"]}%',                        "Fix rate", fix_color),
+    ]
+    inner = "".join(
+        f'<div style="flex:1;min-width:110px;background:#f9fafb;border:1px solid #e5e7eb;'
+        f'padding:14px 10px;border-radius:10px;text-align:center;">'
+        f'<div style="font-size:22px;">{icon}</div>'
+        f'<div style="font-size:20px;font-weight:700;color:{c[3] if len(c)>3 else "#111827"};margin:4px 0;">{val}</div>'
+        f'<div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;">{lbl}</div>'
+        f'</div>'
+        for c in cards for icon, val, lbl, *_ in [c]
+    )
+    return f'<div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">{inner}</div>'
+
+
+def _severity_fig(rows: list[dict]):
+    if not rows:
+        return go.Figure().update_layout(title="No findings")
+    color_map = {"high": "#ef4444", "medium": "#f59e0b", "low": "#22c55e"}
+    labels  = [r["severity"] for r in rows]
+    values  = [r["count"]    for r in rows]
+    colors  = [color_map.get(s, "#9ca3af") for s in labels]
+    fig = go.Figure(go.Pie(
+        labels=labels, values=values, marker_colors=colors,
+        hole=0.45, textinfo="label+percent",
+    ))
+    fig.update_layout(
+        title="Findings by severity", height=300,
+        margin=dict(l=20, r=20, t=50, b=20),
+        paper_bgcolor="white", showlegend=False,
+    )
+    return fig
+
+
+def _status_fig(rows: list[dict]):
+    if not rows:
+        return go.Figure().update_layout(title="No findings")
+    color_map = {"pending": "#ef4444", "fixed": "#22c55e",
+                 "manual": "#3b82f6", "ignored": "#9ca3af",
+                 "partial_fix": "#f59e0b", "pending_fix": "#a855f7"}
+    labels = [r["status"] for r in rows]
+    values = [r["count"]  for r in rows]
+    colors = [color_map.get(s, "#6b7280") for s in labels]
+    fig = go.Figure(go.Bar(
+        x=labels, y=values, marker_color=colors,
+        text=values, textposition="outside",
+    ))
+    fig.update_layout(
+        title="Findings by status", height=300,
+        margin=dict(l=40, r=20, t=50, b=50),
+        plot_bgcolor="white", paper_bgcolor="white",
+        yaxis=dict(showgrid=True, gridcolor="#f3f4f6"),
+    )
+    return fig
+
+
+def _rules_fig(rows: list[dict]):
+    if not rows:
+        return go.Figure().update_layout(title="No rule data")
+    items = [(r["rule_code"], r["count"]) for r in rows]
+    items.sort(key=lambda x: x[1])
+    fig = go.Figure(go.Bar(
+        x=[i[1] for i in items], y=[i[0] for i in items],
+        orientation="h", marker_color="#6366f1",
+        text=[str(i[1]) for i in items], textposition="outside",
+    ))
+    fig.update_layout(
+        title="Top violation types", height=360,
+        margin=dict(l=200, r=60, t=50, b=40),
+        plot_bgcolor="white", paper_bgcolor="white",
+        font=dict(size=12),
+    )
+    return fig
+
+
+def _owners_fig(rows: list[dict]):
+    if not rows:
+        return go.Figure().update_layout(title="No owner data")
+    owners   = [r["owner_username"] for r in rows]
+    open_v   = [r["open"]     for r in rows]
+    resolved = [r["resolved"] for r in rows]
+    fig = go.Figure(data=[
+        go.Bar(name="Open",     x=owners, y=open_v,   marker_color="#ef4444"),
+        go.Bar(name="Resolved", x=owners, y=resolved, marker_color="#22c55e"),
+    ])
+    fig.update_layout(
+        barmode="group", title="Findings by owner",
+        height=300, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=40, r=20, t=60, b=50),
+        plot_bgcolor="white", paper_bgcolor="white",
+    )
+    return fig
+
+
+def _timeline_fig(rows: list[dict]):
+    if not rows:
+        return go.Figure().update_layout(title="No run history yet")
+    days = [r["day"]  for r in rows]
+    runs = [r["runs"] for r in rows]
+    fig = go.Figure(go.Scatter(
+        x=days, y=runs, mode="lines+markers",
+        line=dict(color="#6366f1", width=2),
+        marker=dict(size=6),
+        fill="tozeroy", fillcolor="rgba(99,102,241,0.1)",
+    ))
+    fig.update_layout(
+        title="Validation runs over time", height=250,
+        margin=dict(l=40, r=20, t=50, b=50),
+        plot_bgcolor="white", paper_bgcolor="white",
+        xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor="#f3f4f6"),
+    )
+    return fig
+
+
+def run_analytics_ui():
+    """Refresh handler for Tab 4 — queries Postgres and returns all chart data."""
+    try:
+        (get_stats, get_sev, get_status,
+         get_rules, get_owners, get_timeline) = _chase_db()
+
+        stats    = get_stats()
+        sev      = get_sev()
+        statuses = get_status()
+        rules    = get_rules()
+        owners   = get_owners()
+        timeline = get_timeline()
+
+        return (
+            _analytics_kpi_html(stats),
+            _severity_fig(sev),
+            _status_fig(statuses),
+            _rules_fig(rules),
+            _owners_fig(owners),
+            _timeline_fig(timeline),
+            "",
+        )
+    except Exception as exc:
+        logger.warning(f"Analytics DB error: {exc}")
+        err = f"⚠️ Cannot reach database: {exc}"
+        return (err, None, None, None, None, None, f"🔴 {exc}")
+
+
 OLLAMA_MODELS = [
     "llama3.2", "llama3.1", "qwen2.5", "qwen2.5:14b",
     "mistral", "gemma3", "phi4", "deepseek-r1",
@@ -672,6 +839,27 @@ def build_ui() -> gr.Blocks:
                         upload_btn    = gr.Button("📥 Ingest")
                         upload_status = gr.Textbox(label="Status", interactive=False)
 
+            # ═══════════════════════════════════════════════════════════════════
+            # TAB 4 — ANALYTICS
+            # ═══════════════════════════════════════════════════════════════════
+            with gr.Tab("📊 Analytics") as analytics_tab:
+
+                with gr.Row():
+                    analytics_refresh_btn = gr.Button("🔄 Refresh", variant="primary", scale=1, min_width=120)
+                    analytics_status      = gr.Markdown(value="", scale=5)
+
+                analytics_kpi = gr.HTML(value="")
+
+                with gr.Row():
+                    analytics_severity_plot = gr.Plot(label="")
+                    analytics_status_plot   = gr.Plot(label="")
+
+                with gr.Row():
+                    analytics_rules_plot  = gr.Plot(label="")
+                    analytics_owners_plot = gr.Plot(label="")
+
+                analytics_timeline_plot = gr.Plot(label="")
+
         # ── Wiring ────────────────────────────────────────────────────────────
 
         # Tab 1 — Run Audit
@@ -739,6 +927,17 @@ def build_ui() -> gr.Blocks:
 
         recall_btn.click(show_memories,  inputs=thread_state,   outputs=memory_box)
         upload_btn.click(upload_docs,    inputs=file_upload_rag, outputs=upload_status)
+
+        # Tab 4 — Analytics
+        _analytics_outputs = [
+            analytics_kpi,
+            analytics_severity_plot, analytics_status_plot,
+            analytics_rules_plot,    analytics_owners_plot,
+            analytics_timeline_plot,
+            analytics_status,
+        ]
+        analytics_refresh_btn.click(run_analytics_ui, outputs=_analytics_outputs)
+        analytics_tab.select(run_analytics_ui,         outputs=_analytics_outputs)
 
     return demo
 
