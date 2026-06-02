@@ -43,6 +43,7 @@ from agents import (
     build_researcher_agent,
     build_coder_agent,
     build_general_agent,
+    build_auditor_agent,
 )
 from agents.critic import critic_node, route_after_critic
 from config import settings
@@ -177,10 +178,12 @@ def build_graph(mcp_tools: list | None = None, enable_hitl: bool = False) -> Any
     researcher = build_researcher_agent(extra_tools=(mcp_tools or []) + memory_tools)
     coder      = build_coder_agent(extra_tools=(mcp_tools or []) + memory_tools)
     general    = build_general_agent(extra_tools=(mcp_tools or []) + memory_tools)
+    auditor    = build_auditor_agent(extra_tools=(mcp_tools or []) + memory_tools)
 
     researcher_node = _make_agent_node(researcher, "researcher")
     coder_node      = _make_agent_node(coder,      "coder")
     general_node    = _make_agent_node(general,    "general")
+    auditor_node    = _make_agent_node(auditor,    "auditor")
 
     # ── Build graph ───────────────────────────────────────────────────────────
     builder = StateGraph(AgentState)
@@ -190,6 +193,7 @@ def build_graph(mcp_tools: list | None = None, enable_hitl: bool = False) -> Any
     builder.add_node("researcher",    researcher_node)
     builder.add_node("coder",         coder_node)
     builder.add_node("general",       general_node)
+    builder.add_node("auditor",       auditor_node)
     builder.add_node("critic",        critic_node)
     builder.add_node("hitl",          hitl_node)
 
@@ -213,6 +217,7 @@ def build_graph(mcp_tools: list | None = None, enable_hitl: bool = False) -> Any
             "researcher": "researcher",
             "coder":      "coder",
             "general":    "general",
+            "auditor":    "auditor",
             "FINISH":     "hitl",
         },
     )
@@ -221,6 +226,7 @@ def build_graph(mcp_tools: list | None = None, enable_hitl: bool = False) -> Any
     builder.add_edge("researcher", "critic")
     builder.add_edge("coder",      "critic")
     builder.add_edge("general",    "critic")
+    builder.add_edge("auditor",    "critic")
 
     # Critic → back to specialist (revise) or supervisor (pass)
     builder.add_conditional_edges(
@@ -230,6 +236,7 @@ def build_graph(mcp_tools: list | None = None, enable_hitl: bool = False) -> Any
             "researcher": "researcher",
             "coder":      "coder",
             "general":    "general",
+            "auditor":    "auditor",
             "FINISH":     "hitl",
         },
     )

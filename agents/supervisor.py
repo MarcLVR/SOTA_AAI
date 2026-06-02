@@ -15,7 +15,7 @@ from .llm import get_llm
 from config import settings
 from graph.state import AgentState
 
-MEMBERS = ["researcher", "coder", "general"]
+MEMBERS = ["researcher", "coder", "general", "auditor"]
 OPTIONS = MEMBERS + ["FINISH"]
 
 SUPERVISOR_PROMPT = f"""You are a supervisor orchestrating a team of AI agents.
@@ -25,6 +25,7 @@ Roles:
   researcher  — web search, document retrieval, fact-finding
   coder       — write and execute Python code, data analysis, scripting
   general     — reasoning, planning, Q&A, synthesis, anything else
+  auditor     — document auditing, AI-readiness scanning, data hygiene, corpus quality checks
 
 Given the conversation so far, decide:
   1. Which agent should act next?
@@ -35,7 +36,7 @@ Do not call any tools yourself — just route."""
 
 
 class SupervisorDecision(BaseModel):
-    next: Literal["researcher", "coder", "general", "FINISH"] = Field(
+    next: Literal["researcher", "coder", "general", "auditor", "FINISH"] = Field(
         description="Which agent acts next, or FINISH if the task is complete."
     )
     reasoning: str = Field(description="One-sentence rationale for routing decision.")

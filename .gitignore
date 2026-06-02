@@ -6,3 +6,5 @@ data/
 *.sqlite
 *.db
 .DS_Store
+domain.zip
+*.zip

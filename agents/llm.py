@@ -1,23 +1,25 @@
 """
 LLM factory — returns a chat model based on settings.
 
-Supports three providers selected via LLM_PROVIDER:
-    gemini  -> ChatGoogleGenerativeAI (Google AI Studio, free tier)
-    groq    -> ChatGroq (Groq, free tier, ultra-fast Llama 3.3 70B)
-    ollama  -> ChatOllama (local, requires Ollama running)
+Supported providers (LLM_PROVIDER):
+    anthropic -> ChatAnthropic  (default; ANTHROPIC_API_KEY required)
+    groq      -> ChatGroq       (fast/free; GROQ_API_KEY required)
+    ollama    -> ChatOllama     (local; Ollama service required)
+    # gemini  -> DISABLED (20 req/day free-tier quota; see commented block below)
 
-Role-based routing:
-    Different agent roles can use different providers. Set ROLE_PROVIDER_<role>
-    in .env to override the default provider for that role.
-
+Role-based provider routing:
+    ROLE_PROVIDER_<ROLE>=<provider>  overrides the default for a specific role.
     Examples:
-        ROLE_PROVIDER_CRITIC=groq        # critic uses Groq (fast)
-        ROLE_PROVIDER_SUPERVISOR=gemini  # supervisor uses Gemini (reasoning)
+        ROLE_PROVIDER_CRITIC=groq         # critic on Groq (fast, free)
+        ROLE_PROVIDER_SUPERVISOR=anthropic
 
-    Any role without an override uses the default LLM_PROVIDER.
+Per-role model overrides:
+    ROLE_MODEL_<ROLE>=<model>  selects a specific model for that role regardless
+    of the provider's default. Only applies when the role's provider supports it.
+    Example:
+        ROLE_MODEL_EXECUTOR=claude-sonnet-4-6  # stronger model for document rewriting
 
-Embeddings (Mem0, RAG via nomic-embed-text) are unaffected. They live in
-memory/episodic.py and memory/vector_store.py and continue to use Ollama.
+Embeddings (Mem0, RAG) always use Ollama nomic-embed-text — unaffected by LLM_PROVIDER.
 """
 import os
 from functools import lru_cache
@@ -28,11 +30,17 @@ from config import settings
 def _provider_for_role(role: str | None) -> str:
     """Return the provider to use for a given role, or the default."""
     if role:
-        env_key = f"ROLE_PROVIDER_{role.upper()}"
-        override = os.environ.get(env_key)
+        override = os.environ.get(f"ROLE_PROVIDER_{role.upper()}")
         if override:
             return override.lower()
     return settings.llm_provider.lower()
+
+
+def _model_for_role(role: str | None) -> str | None:
+    """Return a per-role model override from ROLE_MODEL_<ROLE>, or None."""
+    if role:
+        return os.environ.get(f"ROLE_MODEL_{role.upper()}")
+    return None
 
 
 @lru_cache(maxsize=8)
@@ -53,21 +61,19 @@ def get_llm(
     t = temperature if temperature is not None else settings.temperature
     provider = _provider_for_role(role)
 
-    if provider == "gemini":
-        from langchain_google_genai import ChatGoogleGenerativeAI
+    if provider == "anthropic":
+        from langchain_anthropic import ChatAnthropic
 
-        if not settings.google_api_key:
+        if not settings.anthropic_api_key:
             raise RuntimeError(
-                "Provider=gemini but GOOGLE_API_KEY is not set. "
-                "Get a free key at https://aistudio.google.com/apikey"
+                "Provider=anthropic but ANTHROPIC_API_KEY is not set in .env."
             )
-        m = model or settings.gemini_model
-        logger.info(f"Loading LLM: provider=gemini model={m} temp={t} role={role}")
-        return ChatGoogleGenerativeAI(
+        m = model or _model_for_role(role) or settings.anthropic_model
+        logger.info(f"Loading LLM: provider=anthropic model={m} temp={t} role={role}")
+        return ChatAnthropic(
             model=m,
             temperature=t,
-            google_api_key=settings.google_api_key,
-            convert_system_message_to_human=False,
+            anthropic_api_key=settings.anthropic_api_key,
         )
 
     if provider == "groq":
@@ -78,7 +84,7 @@ def get_llm(
                 "Provider=groq but GROQ_API_KEY is not set. "
                 "Get a free key at https://console.groq.com/keys"
             )
-        m = model or settings.groq_model
+        m = model or _model_for_role(role) or settings.groq_model
         logger.info(f"Loading LLM: provider=groq model={m} temp={t} role={role}")
         return ChatGroq(
             model=m,
@@ -89,7 +95,7 @@ def get_llm(
     if provider == "ollama":
         from langchain_ollama import ChatOllama
 
-        m = model or settings.ollama_model
+        m = model or _model_for_role(role) or settings.ollama_model
         logger.info(f"Loading LLM: provider=ollama model={m} temp={t} role={role}")
         return ChatOllama(
             base_url=settings.ollama_base_url,
@@ -97,6 +103,22 @@ def get_llm(
             temperature=t,
         )
 
+    # ── Gemini disabled — free tier limited to ~20 req/day, breaks multi-agent runs ──
+    # To re-enable: set LLM_PROVIDER=gemini and GOOGLE_API_KEY in .env,
+    # then uncomment the block below and add langchain-google-genai back to imports.
+    #
+    # if provider == "gemini":
+    #     from langchain_google_genai import ChatGoogleGenerativeAI
+    #     if not settings.google_api_key:
+    #         raise RuntimeError("Provider=gemini but GOOGLE_API_KEY is not set.")
+    #     m = model or _model_for_role(role) or settings.gemini_model
+    #     logger.info(f"Loading LLM: provider=gemini model={m} temp={t} role={role}")
+    #     return ChatGoogleGenerativeAI(
+    #         model=m, temperature=t,
+    #         google_api_key=settings.google_api_key,
+    #         convert_system_message_to_human=False,
+    #     )
+
     raise ValueError(
-        f"Unknown provider={provider!r}. Use 'gemini', 'groq', or 'ollama'."
+        f"Unknown provider={provider!r}. Valid: 'anthropic', 'groq', 'ollama'."
     )

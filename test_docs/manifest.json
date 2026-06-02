@@ -1,0 +1,114 @@
+{
+  "generated": "2026-06-01",
+  "description": "Documentos sinteticos corporativos para testing de DAVE",
+  "total": 8,
+  "with_findings": 7,
+  "clean": 1,
+  "documents": [
+    {
+      "filename": "contrato_juan_garcia_2024.docx",
+      "format": "docx",
+      "lang": "es",
+      "doc_type": "contrato",
+      "size_bytes": 37468,
+      "expected_findings": [
+        "pii_dni",
+        "pii_phone",
+        "pii_email",
+        "pii_fullname_header"
+      ],
+      "has_violations": true
+    },
+    {
+      "filename": "gdpr_policy_draft.docx",
+      "format": "docx",
+      "lang": "en",
+      "doc_type": "policy",
+      "size_bytes": 37351,
+      "expected_findings": [
+        "placeholder_values",
+        "missing_author",
+        "missing_review_date"
+      ],
+      "has_violations": true
+    },
+    {
+      "filename": "spec_autenticacion_v0.docx",
+      "format": "docx",
+      "lang": "es",
+      "doc_type": "spec",
+      "size_bytes": 37319,
+      "expected_findings": [
+        "placeholder_values",
+        "missing_version",
+        "missing_author",
+        "missing_changelog"
+      ],
+      "has_violations": true
+    },
+    {
+      "filename": "2026-06-01_contrato_limpio.docx",
+      "format": "docx",
+      "lang": "es",
+      "doc_type": "contrato",
+      "size_bytes": 37465,
+      "expected_findings": [],
+      "has_violations": false
+    },
+    {
+      "filename": "informe_ventas_Q1_2026.pdf",
+      "format": "pdf",
+      "lang": "es",
+      "doc_type": "informe",
+      "size_bytes": 2436,
+      "expected_findings": [
+        "naming_convention",
+        "missing_cover_page",
+        "missing_executive_summary",
+        "missing_index"
+      ],
+      "has_violations": true
+    },
+    {
+      "filename": "api_design_FINAL_v2.pdf",
+      "format": "pdf",
+      "lang": "en",
+      "doc_type": "spec",
+      "size_bytes": 2325,
+      "expected_findings": [
+        "naming_convention",
+        "pii_email",
+        "pii_phone",
+        "missing_version_field"
+      ],
+      "has_violations": true
+    },
+    {
+      "filename": "kickoff_proyecto_alpha.pptx",
+      "format": "pptx",
+      "lang": "es",
+      "doc_type": "presentacion",
+      "size_bytes": 36912,
+      "expected_findings": [
+        "placeholder_values",
+        "pii_in_notes",
+        "pii_phone",
+        "pii_email"
+      ],
+      "has_violations": true
+    },
+    {
+      "filename": "Q1_Results_Deck.pptx",
+      "format": "pptx",
+      "lang": "en",
+      "doc_type": "presentacion",
+      "size_bytes": 32084,
+      "expected_findings": [
+        "naming_convention",
+        "pii_email",
+        "pii_phone"
+      ],
+      "has_violations": true
+    }
+  ]
+}

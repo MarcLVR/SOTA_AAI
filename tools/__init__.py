@@ -1,6 +1,15 @@
 from .web_search import web_search
 from .code_executor import python_repl
 from .file_tools import read_file, write_file, list_files
+from .audit_tools import (
+    crawl_repository,
+    extract_document,
+    score_staleness,
+    check_standards,
+    check_governance,
+    aggregate_findings,
+    AUDITOR_TOOLS,
+)
 
 # Tool sets per agent role
 RESEARCHER_TOOLS = [web_search, read_file, list_files]
@@ -13,6 +22,13 @@ __all__ = [
     "read_file",
     "write_file",
     "list_files",
+    "crawl_repository",
+    "extract_document",
+    "score_staleness",
+    "check_standards",
+    "check_governance",
+    "aggregate_findings",
+    "AUDITOR_TOOLS",
     "RESEARCHER_TOOLS",
     "CODER_TOOLS",
     "GENERAL_TOOLS",

@@ -5,8 +5,9 @@ langchain-core>=0.3.0
 langchain-ollama>=0.2.0
 langgraph>=0.2.0
 langgraph-checkpoint-sqlite>=2.0.0
-langchain-google-genai>=2.0.0
+langchain-anthropic>=0.3.0
 langchain-groq>=0.2.0
+langchain-google-genai>=2.0.0       # unused — kept in case Gemini is re-enabled
 
 # ── RAG / Memory ──────────────────────────────────────────────────────────────
 chromadb>=0.5.0
@@ -20,7 +21,6 @@ mem0ai>=0.1.0                         # Mem0 local mode (no API key required)
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
 ddgs>=9.0.0                   # free web search
-langchain-experimental>=0.3.0        # PythonREPLTool (kept as reference)
 
 # ── MCP ───────────────────────────────────────────────────────────────────────
 langchain-mcp-adapters>=0.1.0
@@ -28,6 +28,7 @@ mcp>=1.0.0
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 gradio>=4.44.0
+plotly>=5.0.0                         # dashboard charts (Tab 1 & 2)
 
 # ── Observability ─────────────────────────────────────────────────────────────
 langfuse>=2.0.0                       # optional: set LANGFUSE_* env vars to activate
@@ -37,10 +38,14 @@ langfuse>=2.0.0                       # optional: set LANGFUSE_* env vars to act
 ragas>=0.1.0                          # RAG evaluation metrics
 datasets>=2.0.0                       # HuggingFace datasets (required by ragas)
 
+# ── Office document extraction (Auditor domain layer) ─────────────────────────
+python-docx>=1.0.0
+openpyxl>=3.1.0
+python-pptx>=0.6.0
+
 # ── Utilities ─────────────────────────────────────────────────────────────────
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
 httpx>=0.27.0
-rich>=13.0.0
 loguru>=0.7.0
