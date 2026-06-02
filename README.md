@@ -1,10 +1,10 @@
 # 🤖 SOTA Agentic AI
 
-A **state-of-the-art multi-agent system** built entirely with open-source tools,
-running fully locally via Ollama. Showcases the complete modern agentic stack:
+A **state-of-the-art multi-agent system** with pluggable LLM providers.
+Showcases the complete modern agentic stack:
 LangGraph · Reflexion · HITL · RAG · Episodic Memory · Guardrails · Langfuse.
 
-No OpenAI key required. Everything runs on your machine.
+Supports **Gemini, Groq, and Ollama** (local). No single vendor lock-in.
 
 ---
 
@@ -64,9 +64,10 @@ Observability: Langfuse traces · ConsoleTracer · RAGAS evals
 | Tool use | DuckDuckGo web search, Python REPL, File I/O |
 | MCP servers | `langchain-mcp-adapters` → filesystem (experimental) |
 | Conversation persistence | SQLite checkpointer (resume by thread ID) |
-| Local LLM | Ollama (`llama3.2`, `llama3.1:8b`, `qwen2.5`, …) |
+| LLM providers | **Gemini** (default) · **Groq** (fast, free tier) · **Ollama** (local) |
+| Per-role overrides | `ROLE_PROVIDER_<ROLE>` — pin any agent to any provider |
 | UI | Gradio 6.x (streaming, file upload, agent trace panel) |
-| Config | `pydantic-settings` + `.env` |
+| Config | `pydantic-settings` + `.env` · per-role provider overrides |
 
 ---
 
@@ -90,23 +91,21 @@ and ask you to create a Linux username and password (choose anything you like).
 
 To open Ubuntu in the future: search **Ubuntu** in the Start Menu, or type `wsl` in any terminal.
 
-#### Step 2 — Install Ollama on Windows
+#### Step 2 — (Optional) Install Ollama on Windows
+
+Only needed if you want `LLM_PROVIDER=ollama`. Skip if using Gemini or Groq.
 
 Download and install Ollama from [ollama.ai/download](https://ollama.ai/download).
-
-Ollama runs automatically as a Windows background service after installation —
-you do **not** need to start it manually.
+Ollama runs automatically as a Windows background service.
 
 Open a **Windows** terminal (PowerShell or CMD — not Ubuntu) and pull the models:
 
 ```powershell
-ollama pull llama3.2           # main LLM — fast, good quality (3B)
-ollama pull llama3.1:8b        # better routing and critique (recommended)
-ollama pull nomic-embed-text   # required for RAG document embeddings
+ollama pull llama3.2           # chat model
+ollama pull nomic-embed-text   # required for RAG + episodic memory embeddings
 ```
 
 > Ollama is accessible from WSL2 at `http://localhost:11434` automatically.
-> No extra configuration needed.
 
 #### Step 3 — Install Python 3.11 in Ubuntu
 
@@ -152,19 +151,35 @@ cp .env.example .env
 nano .env
 ```
 
-Set at minimum:
+Choose one LLM provider and set its key:
 
 ```env
+# Option 1 — Gemini (recommended, free tier at aistudio.google.com)
+LLM_PROVIDER=gemini
+GOOGLE_API_KEY=AIza...
+
+# Option 2 — Groq (free tier, fastest inference)
+LLM_PROVIDER=groq
+GROQ_API_KEY=gsk_...
+
+# Option 3 — Ollama (fully local, no key needed)
+LLM_PROVIDER=ollama
 OLLAMA_MODEL=llama3.2
-MAX_SUPERVISOR_ROUNDS=3
 ```
 
-Optional — Langfuse observability (see [Observability](#observability)):
+Optional — pin specific agents to a different provider:
+
+```env
+ROLE_PROVIDER_CRITIC=groq      # fast critic scoring
+ROLE_PROVIDER_SUPERVISOR=gemini
+```
+
+Optional — Langfuse observability:
 
 ```env
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
-LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_HOST=https://cloud.langfuse.com
 ```
 
 Save with `Ctrl+X`, then `Y`, then Enter.
@@ -392,7 +407,7 @@ across restarts and different sessions.
    ```env
    LANGFUSE_PUBLIC_KEY=pk-lf-...
    LANGFUSE_SECRET_KEY=sk-lf-...
-   LANGFUSE_BASE_URL=https://cloud.langfuse.com
+   LANGFUSE_HOST=https://cloud.langfuse.com
    ```
 4. Restart the app — every query now produces a trace in your Langfuse dashboard
 
@@ -435,7 +450,7 @@ SOTA_AAI/
 ├── config/
 │   └── settings.py          # pydantic-settings config singleton
 ├── agents/
-│   ├── llm.py               # LLM factory (ChatOllama)
+│   ├── llm.py               # LLM factory — Gemini / Groq / Ollama, per-role override
 │   ├── supervisor.py        # structured routing node
 │   ├── researcher.py        # web search + RAG ReAct agent
 │   ├── coder.py             # Python REPL ReAct agent
@@ -481,10 +496,18 @@ source .venv/bin/activate
 ```
 You must run this every time you open a new terminal.
 
+**Gemini 429 rate limit**
+
+Free tier is 15–20 requests/minute. Switch high-volume agents to Groq:
+```env
+ROLE_PROVIDER_CRITIC=groq
+```
+
 **`Connection refused` / Ollama not reachable**
 
 On Windows: check the system tray for the Ollama icon. If it's missing, launch Ollama
 from the Start Menu. On Linux/macOS: run `ollama serve` in a separate terminal.
+Verify with: `curl http://localhost:11434/api/tags`
 
 **`Authentication error: Langfuse client initialized without public_key`**
 
@@ -536,9 +559,14 @@ and no data leaving the machine.
 **Why SQLite checkpointer?**
 Zero-dependency persistence. Swap to `langgraph-checkpoint-postgres` for production.
 
+**Why role-based provider routing?**
+Supervisor and agents need strong instruction-following (Gemini); critic needs
+sub-second latency (Groq). `ROLE_PROVIDER_<ROLE>` lets each role use its best
+model without changing shared config.
+
 **Why Mem0 for episodic memory?**
-Mem0 abstracts memory CRUD over any LLM+vector backend. Configured here for full
-local operation via Ollama — no OpenAI key required.
+Mem0 abstracts memory CRUD over any LLM+vector backend. Configured here to use
+Ollama embeddings locally — swap the backend via env vars for production.
 
 ---
 
