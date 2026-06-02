@@ -20,14 +20,15 @@ class Settings(BaseSettings):
     ollama_embed_model: str = "nomic-embed-text"
 
     # ── LLM provider selection ────────────────────────────────────────────────
-    llm_provider: str = "gemini"                       # default: gemini | groq | ollama
-    gemini_model: str = "gemini-2.5-flash"
-    google_api_key: str | None = None
+    llm_provider: str = "anthropic"                    # default: anthropic | groq | ollama
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-haiku-4-5-20251001"
     groq_model: str = "llama-3.3-70b-versatile"
     groq_api_key: str | None = None
 
-    # ── Optional remote fallback ───────────────────────────────────────────────
-    anthropic_api_key: str | None = None
+    # ── Unused / disabled providers (kept for re-enable convenience) ──────────
+    gemini_model: str = "gemini-2.5-flash"             # disabled — quota too restrictive
+    google_api_key: str | None = None
     openai_api_key: str | None = None
 
     # ── Agent behaviour ────────────────────────────────────────────────────────
