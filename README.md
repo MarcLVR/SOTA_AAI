@@ -1,282 +1,408 @@
-# SOTA Agentic AI
+# DAVE — Data Agentic Validation Engine
 
-A **state-of-the-art multi-agent system** with a pluggable domain layer.
-Showcases the complete modern agentic stack:
-LangGraph · Reflexion · HITL · RAG · Episodic Memory · Guardrails · Langfuse.
+> **DAVE** audits your document repositories for AI-readiness: it tells you which
+> files are stale, missing governance metadata, or referencing retired standards —
+> and flags them before they mislead the RAG systems you're building on top of them.
 
-Supports **Gemini, Groq, and Ollama** (local). No single vendor lock-in.
+Built on **LangGraph + Claude (Anthropic)**, with a quota-safe Gradio dashboard that
+works even when your API key is exhausted. No proprietary platform lock-in.
+
+---
+
+## What problem does this solve?
+
+When organisations build RAG systems on top of their document libraries, the quality
+of the retrieved context is only as good as the documents themselves. A contract
+from 2018 that references a superseded ISO standard, a policy with no named owner,
+or a procedure last reviewed three years ago — all of these will be retrieved by
+the RAG system and presented to users as authoritative truth.
+
+DAVE scores every document in your repository on three axes:
+
+| Signal | What it catches |
+|---|---|
+| **Staleness** | Documents past their type-specific review cadence, files nobody has accessed in months, overdue review dates written in the body text |
+| **Standards compliance** | Missing required sections, non-standard file formats, references to retired/superseded standards (e.g. ISO/IEC 27001:2013, "proposed AI Act") |
+| **Governance** | No named owner, no data classification, missing retention date or review date in metadata |
+
+Each document gets a **trust score between 0 and 1**. Anything below 0.70 is flagged
+for human review before you feed it to a RAG pipeline.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                          Gradio UI                              │
-│       streaming chat · trace panel · RAG upload · HITL panel   │
-└────────────────────────┬────────────────────────────────────────┘
-                         │
-                ┌────────▼────────┐
-                │  guardrail_in   │  prompt injection · PII redaction
-                └────────┬────────┘
-                         │
-                ┌────────▼────────┐
-                │   Supervisor    │  structured routing · loop guard
-                └──┬──┬───┬───┬──┘
-                   │  │   │   │
-        ┌──────────▼┐ │ ┌─▼─┐ ┌▼──────────────┐ ┌▼──────────────┐
-        │ Researcher│ │ │Cdr│ │    General    │ │    Auditor    │
-        │  ReAct    │ │ │ReA│ │    ReAct      │ │    ReAct      │
-        └─────┬─────┘ │ └─┬─┘ └───────┬───────┘ └──────┬────────┘
-              └───────┴───┴───────────┴────────────────┘
-                                      │
-                             ┌────────▼────────┐
-                             │     Critic      │  Reflexion · score → revise or FINISH
-                             └────────┬────────┘
-                                      │
-                             ┌────────▼────────┐
-                             │      HITL       │  interrupt() · human approval gate
-                             └────────┬────────┘
-                                      │
-                                    [END]
-
-Tool Layer:  web_search · python_repl (sandboxed) · file_tools · RAG retrieval
-             run_full_audit · crawl_repository · extract_document · score_staleness
-             check_standards · check_governance · aggregate_findings
-Memory:      ChromaDB (semantic) · Mem0 (episodic) · SQLite (conversation state)
-Observability: Langfuse traces · ConsoleTracer · RAGAS evals
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│   GRADIO UI  (http://localhost:7860)                                        │
+│   ┌──────────────┐  ┌──────────────────┐  ┌─────────────────────────────┐  │
+│   │  🔍 Scan     │  │  📋 Documents    │  │  🤖 Ask the agent           │  │
+│   │  Quota-safe  │  │  Drill-in table  │  │  Full multi-agent chat      │  │
+│   │  No LLM      │  │  Row → findings  │  │  with trace panel           │  │
+│   └──────┬───────┘  └────────┬─────────┘  └──────────────┬──────────────┘  │
+│          │                   │                            │                 │
+└──────────┼───────────────────┼────────────────────────────┼─────────────────┘
+           │                   │                            │
+           │  audit_repository()                            │  LangGraph graph
+           │  (pure Python,                                 │  (stateful, resumable)
+           │   no API calls)                                │
+           ▼                                                ▼
+┌──────────────────────┐              ┌──────────────────────────────────────┐
+│   DOMAIN PIPELINE    │              │           LANGGRAPH STATE MACHINE     │
+│                      │              │                                        │
+│  crawl_repository()  │              │  ┌─────────────┐                      │
+│  ↓                   │              │  │ guardrail_in│ PII redaction +       │
+│  extract_document()  │              │  │             │ injection detection   │
+│  ↓                   │              │  └──────┬──────┘                      │
+│  score_staleness()   │              │         │                              │
+│  check_standards()   │              │  ┌──────▼──────┐                      │
+│  check_governance()  │              │  │  Supervisor │ Routes to the right  │
+│  ↓                   │              │  │  (Claude)   │ specialist agent     │
+│  compute_trust_score │              │  └──┬───┬───┬──┘                      │
+│  ↓                   │              │     │   │   │                          │
+│  aggregate_findings()│              │  ┌──▼─┐ │ ┌─▼──┐  ┌────────┐         │
+│                      │              │  │Res-│ │ │Aud-│  │General │         │
+│  Trust score [0,1]   │◄─────────────┤  │earcheriter│  │        │         │
+│  per document        │  tool call   │  │(ReAct)│ │(ReAct)│(ReAct)│         │
+└──────────────────────┘              │  └──┬───┘ │ └──┬─┘  └───┬───┘         │
+                                      │     └─────┴────┘         │             │
+                                      │           │               │             │
+                                      │  ┌────────▼───────────────┘            │
+                                      │  │       Critic (Groq)                 │
+                                      │  │  Scores 0–1 · Reflexion loop        │
+                                      │  │  score < 0.70 → revise              │
+                                      │  │  score ≥ 0.70 → accept              │
+                                      │  └────────┬────────────────────────────│
+                                      │           │                             │
+                                      │  ┌────────▼────────┐                   │
+                                      │  │      HITL       │ Optional human    │
+                                      │  │  interrupt()    │ approval gate     │
+                                      │  └────────┬────────┘                   │
+                                      │           │ END                         │
+                                      └───────────┼─────────────────────────────┘
+                                                  │
+                            ┌─────────────────────┴───────────────────────┐
+                            │              SHARED INFRASTRUCTURE           │
+                            │                                              │
+                            │  Memory:   ChromaDB (RAG) · Mem0 (episodic)│
+                            │  LLMs:     Claude Haiku · Claude Sonnet     │
+                            │            Groq Llama-3.3 (critic only)     │
+                            │  Persist:  SQLite checkpoint (resume conv.) │
+                            │  Observe:  Langfuse traces · ConsoleTracer  │
+                            └──────────────────────────────────────────────┘
 ```
-
-### Deep-dive: how the graph executes
-
-The LangGraph `StateGraph` flows a single `AgentState` TypedDict through every node. All nodes read from and write to this shared state — there are no side-channel calls between agents.
-
-**`guardrail_in`** — runs before the supervisor sees the input. Checks for prompt injection patterns and redacts PII using regex heuristics. If a hard violation is detected, the graph short-circuits to END with a rejection message rather than routing to an agent.
-
-**`supervisor`** — calls the LLM with a structured output schema (`SupervisorDecision`) containing a `next` field (one of `researcher | coder | general | auditor | FINISH`) and a `reasoning` field. A `rounds` counter in state prevents infinite loops: if `rounds >= MAX_SUPERVISOR_ROUNDS`, the supervisor is forced to return `FINISH`.
-
-**Specialist agents** (`researcher`, `coder`, `general`, `auditor`) — all built with `create_react_agent` from `langgraph.prebuilt`. Each has its own tool set and a shared pair of episodic memory tools (`remember`, `recall`). The agents run their internal ReAct loop (observe → think → act) and place an `AIMessage` back on the `messages` list. Execution then moves unconditionally to the critic.
-
-**`critic`** — calls the LLM with `CriticDecision` structured output: `{ score: float, reasoning: str, revise: bool }`. If `score < CRITIC_REVISION_THRESHOLD` (default 0.70) and fewer than `CRITIC_MAX_REVISIONS` (default 2) have been attempted for this turn, the critique is injected as a system hint and routing returns to the originating specialist. Otherwise, execution advances to `hitl`.
-
-**`hitl`** — calls `langgraph.types.interrupt()`. The graph suspends, serialising state to the SQLite checkpointer. The Gradio UI detects the interrupt, surfaces the approval panel, and resumes the graph via `resume_after_hitl(thread_id, approved, feedback)`.
-
-**Checkpointer** — `SqliteSaver` at `data/chroma_db/checkpoints.sqlite`. Every graph step is journaled atomically. Pass the same `thread_id` to resume any prior conversation exactly where it stopped, including across process restarts.
 
 ---
 
-## Features
+## How each piece works
 
-| Feature | Technology |
-|---|---|
-| Multi-agent orchestration | LangGraph (supervisor pattern) |
-| Specialist agents | ReAct (`create_react_agent`) — Researcher, Coder, General, **Auditor** |
-| **AI-Readiness Auditor** | Domain pipeline: crawl → extract → staleness/standards/governance → aggregate |
-| **Reflexion / self-critique** | Critic node with structured `CriticDecision` scoring (0–1) |
-| **Human-in-the-loop (HITL)** | LangGraph `interrupt()` — pause, review, approve or reject |
-| **Episodic memory** | Mem0 (Ollama-backed) — remembers facts across sessions |
-| **Input/output guardrails** | Prompt injection detection · PII redaction |
-| **Observability** | Langfuse cloud tracing + local ConsoleTracer |
-| **Eval harness** | RAGAS (answer correctness, faithfulness) + agent evals |
-| RAG / semantic memory | ChromaDB + `sentence-transformers` (CPU, no API key) |
-| Sandboxed code execution | subprocess + timeout + matplotlib support |
-| Tool use | DuckDuckGo web search, Python REPL, File I/O, Office document extraction |
-| MCP servers | `langchain-mcp-adapters` → filesystem (experimental) |
-| Conversation persistence | SQLite checkpointer (resume by thread ID) |
-| LLM providers | **Gemini** (default) · **Groq** (fast, high rate limits) · Ollama (local) |
-| UI | Gradio 6.x (streaming, file upload, agent trace panel) |
-| Config | `pydantic-settings` + `.env` · per-role provider overrides |
+### The Domain Pipeline (no LLM, instant, quota-safe)
+
+This is the heart of DAVE. It runs entirely in Python — no API calls, no GPU, no
+waiting. You can scan thousands of documents in seconds.
+
+```
+1. crawl_repository(folder)
+      Walk the folder recursively, collect every file's path, size, and
+      last-modified / last-accessed timestamps. Classify each file by doc type
+      (contract, policy, procedure, OKR, data dictionary…) from its filename.
+
+2. extract_document(path)
+      Read the file content and embedded metadata (author, title, created date)
+      using python-docx, openpyxl, python-pptx, pypdf, or plain text parsers.
+
+3. score_staleness(doc_type, modified_at, accessed_at, text)
+      Compare the document's age to the type-specific review cadence defined in
+      domain/knowledge.py. A policy is stale after 365 days; a contract after 730.
+      Also scans the body text for overdue review dates ("next review: Q1 2022").
+
+4. check_standards(doc_type, extension, text)
+      Verify the file uses a standard format (.docx not .txt for contracts).
+      Check that required headings (e.g. "Owner", "Scope") are present.
+      Scan for references to retired standards (ISO/IEC 27001:2013,
+      "proposed AI Act", deprecated regulation names).
+
+5. check_governance(doc_type, metadata, text)
+      Look for owner field, classification label, retention date, and review date
+      in both embedded metadata (Word properties) and inline body text.
+
+6. compute_trust_score()
+      Weighted sum: Staleness × 0.40 + Standards × 0.35 + Governance × 0.25
+      Result ∈ [0, 1]. Below 0.70 → flagged for supervision.
+
+7. aggregate_findings()
+      Roll all per-document results into a corpus dashboard: headline metrics,
+      reasons breakdown, by-type breakdown, top offenders, oldest/largest docs.
+```
+
+### The LangGraph State Machine
+
+Every user message flows through a directed graph of nodes. All nodes read from and
+write to a single `AgentState` TypedDict — there is no shared mutable state
+outside the graph.
+
+**`guardrail_in`** — The first gate. Checks for prompt injection patterns
+(instructions disguised as user messages) and redacts PII (email addresses, phone
+numbers, ID numbers) before the supervisor ever sees the input. Hard violations
+short-circuit to END immediately.
+
+**`supervisor` (Claude Haiku)** — Reads the full conversation and returns a
+structured routing decision (`SupervisorDecision`) with two fields: `next` (which
+agent to call) and `reasoning` (one sentence explaining why). A hard counter stops
+infinite loops if `MAX_SUPERVISOR_ROUNDS` is reached.
+
+**Specialist agents** — Each is a `create_react_agent` (LangGraph's ReAct
+implementation). The agent receives the conversation history plus its own system
+prompt, picks tools to call, runs them, observes the results, and decides whether to
+call another tool or give a final answer. This loop continues until the agent
+produces a final `AIMessage`.
+
+| Agent | Model | Tools |
+|---|---|---|
+| **Researcher** | Claude Haiku | `web_search`, `retrieve_from_memory`, `read_file` |
+| **Coder** | Claude Haiku | `python_repl` (sandboxed subprocess), `read_file`, `write_file` |
+| **General** | Claude Haiku | `remember`, `recall` (episodic memory) |
+| **Auditor** | Claude Haiku | `run_full_audit`, `extract_document`, `score_staleness`, `check_standards`, `check_governance` |
+
+**`critic` (Groq Llama-3.3-70B)** — After every specialist responds, the critic
+scores the response 0–1 on four axes: completeness, accuracy, clarity, and tool use.
+If the score is below 0.70 and fewer than 2 revisions have been attempted, the
+critique is injected as a follow-up human message and execution returns to the
+specialist. This is the **Reflexion** pattern.
+
+> Groq is used here specifically because it is fast (sub-second) and the critic task
+> does not require the reasoning depth of Claude. This saves both latency and cost.
+
+**`hitl`** — When "Enable HITL" is toggled in the UI, execution pauses here using
+LangGraph's `interrupt()`. The full graph state is serialised to SQLite. The UI
+shows the agent's proposed response and a score. You can approve or reject with
+feedback, and the graph resumes from the exact checkpoint.
+
+### Memory
+
+**Semantic / RAG** — Documents you upload in the UI are chunked and embedded using
+`sentence-transformers/all-MiniLM-L6-v2` (runs on CPU, no API key, ~50 ms per
+query). Stored in ChromaDB locally. The Researcher retrieves relevant chunks before
+searching the web.
+
+**Episodic** — Backed by Mem0 with local Ollama embeddings. When you tell the
+General agent "remember that I prefer bullet points", it stores that fact. Future
+conversations retrieve it via cosine similarity. Persists across restarts.
+
+**Conversation state** — Every graph step is journaled to a SQLite checkpoint. Pass
+the same `thread_id` to resume any conversation from where it left off, even after
+a process restart.
+
+### LLM provider routing
+
+```
+Default provider: Anthropic (claude-haiku-4-5-20251001)
+
+Role overrides (in .env):
+  ROLE_PROVIDER_CRITIC=groq          → Groq for speed/cost on 0-1 scoring
+  ROLE_MODEL_EXECUTOR=claude-sonnet-4-6  → Sonnet for document rewriting quality
+
+Pattern: ROLE_PROVIDER_<ROLE>=<provider>
+         ROLE_MODEL_<ROLE>=<model>
+```
+
+---
+
+## Features at a glance
+
+| Feature | Technology | Why it matters |
+|---|---|---|
+| **AI-readiness audit pipeline** | Pure Python, no LLM | Runs instantly on thousands of docs; survives API quota exhaustion |
+| **Multi-agent orchestration** | LangGraph supervisor pattern | Clean separation of concerns; each agent only does one thing well |
+| **Reflexion self-critique** | Critic node with `CriticDecision` | Responses are iteratively improved before reaching the user |
+| **Human-in-the-loop** | LangGraph `interrupt()` | Pause any response for review; resume from checkpoint without re-running |
+| **3-tab Gradio dashboard** | Gradio 6.x | Tab 1: quota-safe scan; Tab 2: document drill-in; Tab 3: chat |
+| **Episodic memory** | Mem0 + local embeddings | Remembers facts across sessions without any cloud dependency |
+| **RAG** | ChromaDB + sentence-transformers | CPU-only, no API key, no data leaves the machine |
+| **Input guardrails** | Regex + heuristics | Blocks prompt injection and redacts PII before the LLM sees it |
+| **Full observability** | Langfuse + ConsoleTracer | Every agent decision, tool call, and score is traceable |
+| **Sandboxed code execution** | subprocess + timeout | Coder agent runs Python safely with matplotlib support |
+| **Multi-provider LLM** | Anthropic · Groq · Ollama | Per-role overrides; no single vendor dependency |
+| **Conversation persistence** | SQLite checkpointer | Resume any conversation across restarts |
 
 ---
 
 ## Installation
 
-### Prerequisites
+> You will need: a terminal, Python 3.11, and an Anthropic API key. That's it.
+> Estimated setup time: **15–20 minutes** on a standard laptop.
 
-| Requirement | Version | Notes |
-|---|---|---|
-| Python | **3.11 exactly** | 3.12+ breaks Mem0 and ChromaDB native deps |
-| Git | any | |
-| Ollama | latest | Only needed for local LLM or embeddings |
-| GOOGLE_API_KEY **or** GROQ_API_KEY | — | At least one LLM provider key is required |
+### Before you start — get your API keys
+
+You need at least one of these. Anthropic is the default and recommended choice.
+
+**Anthropic (recommended)**
+1. Go to [console.anthropic.com](https://console.anthropic.com)
+2. Sign up or log in
+3. Click **API Keys** in the left sidebar
+4. Click **Create Key**, give it a name, and copy the key — it starts with `sk-ant-`
+5. Keep it somewhere safe, you'll paste it in Step 7 below
+
+**Groq (free, needed for the critic)**
+1. Go to [console.groq.com](https://console.groq.com)
+2. Sign up (free, no credit card needed)
+3. Click **API Keys** → **Create API Key**
+4. Copy the key — it starts with `gsk_`
 
 ---
 
-### Option A — Windows with WSL2
+### Option A — Windows (recommended path)
 
-The app runs inside Ubuntu on WSL2. Ollama (if used) runs natively on Windows and is reachable from WSL2 at `http://localhost:11434` because WSL2 bridges the loopback.
+The app runs inside Ubuntu on Windows Subsystem for Linux (WSL2). This takes a
+few extra steps but gives you a proper Linux environment on Windows.
 
-#### Step 1 — Enable WSL2 and install Ubuntu
+#### Step 1 — Open PowerShell as Administrator
 
-Open **PowerShell as Administrator**:
+Press `Windows key`, type `PowerShell`, right-click **Windows PowerShell**, and
+choose **Run as administrator**.
+
+#### Step 2 — Install WSL2 with Ubuntu
+
+Paste this command and press Enter:
 
 ```powershell
 wsl --install -d Ubuntu
 ```
 
-This enables the WSL2 feature, installs the Linux kernel update, and installs Ubuntu 22.04. Restart when prompted. Ubuntu opens automatically on first boot and asks you to create a UNIX username and password.
+This will take a few minutes. When it finishes, **restart your computer**.
 
-To verify WSL2 (not WSL1) is active:
+After restarting, Ubuntu will open automatically. It will ask you to create a
+username and password — choose anything you like, you'll need them later.
+
+> If Ubuntu doesn't open automatically after restart, search for "Ubuntu" in the
+> Start Menu and open it.
+
+To confirm everything worked, open a new PowerShell and run:
 
 ```powershell
 wsl --list --verbose
-# Expected: Ubuntu   Running   2
 ```
 
-#### Step 2 — (Optional) Install Ollama on Windows
+You should see `Ubuntu   Running   2` (the `2` means WSL2, not the older WSL1).
 
-Only needed if you want local LLM (`LLM_PROVIDER=ollama`) or if you need local embeddings without a cloud API key.
+#### Step 3 — Install Python 3.11 in Ubuntu
 
-Download the Windows installer from [ollama.ai/download](https://ollama.ai/download), run it, then open a normal (non-admin) PowerShell and pull the models:
-
-```powershell
-# Chat model
-ollama pull llama3.2
-
-# Embedding model — required by both RAG and Mem0 regardless of LLM_PROVIDER
-ollama pull nomic-embed-text
-```
-
-Ollama runs as a background Windows service after installation. Verify it is up:
-
-```powershell
-curl http://localhost:11434/api/tags
-# Should return a JSON list of installed models
-```
-
-#### Step 3 — Install Python 3.11 inside Ubuntu
-
-Open the Ubuntu terminal:
+Open the Ubuntu terminal (search "Ubuntu" in Start Menu). Run these commands one
+at a time, pressing Enter after each:
 
 ```bash
 sudo apt update && sudo apt upgrade -y
-
-# Install Python 3.11 and build tools
-sudo apt install -y \
-  python3.11 \
-  python3.11-venv \
-  python3.11-dev \
-  python3-pip \
-  git \
-  build-essential \
-  libssl-dev \
-  libffi-dev
 ```
 
-Confirm the version:
+_(This may take a few minutes. Enter your Ubuntu password when asked.)_
+
+```bash
+sudo apt install -y python3.11 python3.11-venv python3.11-dev git build-essential
+```
+
+Check it worked:
 
 ```bash
 python3.11 --version
-# Python 3.11.x
 ```
+
+You should see `Python 3.11.x`. If you see 3.12 or higher, see Troubleshooting.
 
 #### Step 4 — Clone the repository
 
+In the Ubuntu terminal:
+
 ```bash
-git clone https://github.com/MarcLVR/SOTA_AAI.git
-cd SOTA_AAI
+git clone https://github.com/OAPMaaS/dave.git
+cd dave
 ```
 
-#### Step 5 — Create and activate a virtual environment
+#### Step 5 — Create a virtual environment
 
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-
-# Confirm the right Python is active
-python --version   # Python 3.11.x
-which python       # .../SOTA_AAI/.venv/bin/python
 ```
 
-Always run `source .venv/bin/activate` at the start of every new terminal session before running the app.
+Your terminal prompt should now start with `(.venv)`. This means the virtual
+environment is active. You need to run `source .venv/bin/activate` every time
+you open a new terminal window.
 
-#### Step 6 — Install Python dependencies
+#### Step 6 — Install dependencies
 
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-The first install downloads ~1.5 GB including PyTorch (CPU), sentence-transformers, ChromaDB, and all LangChain packages. This takes 3–10 minutes depending on your connection.
+This downloads about 1.5 GB of packages (PyTorch, LangChain, ChromaDB, etc.).
+It takes **5–15 minutes** depending on your internet connection.
 
-Notable heavy packages and why they are needed:
+> It's normal to see warnings during this step. Only worry about lines that say
+> `ERROR`. If you see any ERROR lines, see Troubleshooting below.
 
-| Package | Size | Purpose |
-|---|---|---|
-| `torch` (CPU) | ~700 MB | Required by `sentence-transformers` for local embeddings |
-| `sentence-transformers` | ~90 MB model download on first run | `all-MiniLM-L6-v2` — local RAG embeddings, no API key |
-| `chromadb` | ~30 MB | Persistent vector store for RAG + Mem0 |
-| `mem0ai` | ~20 MB | Episodic memory, uses Ollama `nomic-embed-text` locally |
-
-#### Step 7 — Configure the environment
+#### Step 7 — Configure your API keys
 
 ```bash
 cp .env.example .env
-nano .env   # or use your preferred editor
+nano .env
 ```
 
-Set **at minimum** one LLM provider key (see [Environment variables reference](#environment-variables-reference) below):
+This opens a text editor. Use the arrow keys to navigate.
+
+Find these lines and fill in your keys:
 
 ```env
-# Option 1 — Gemini (recommended, free tier at aistudio.google.com)
-LLM_PROVIDER=gemini
-GOOGLE_API_KEY=AIza...
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...your-key-here...
 
-# Option 2 — Groq (free tier, fastest inference)
-LLM_PROVIDER=groq
-GROQ_API_KEY=gsk_...
-
-# Option 3 — Ollama (fully local, no key needed)
-LLM_PROVIDER=ollama
-OLLAMA_MODEL=llama3.2
+GROQ_API_KEY=gsk_...your-key-here...
 ```
 
-#### Step 8 — Verify the installation
+To save: press `Ctrl+X`, then `Y`, then `Enter`.
+
+#### Step 8 — Smoke test
 
 ```bash
-# Smoke-test: import the core packages
-python -c "import langchain, langgraph, chromadb, gradio; print('OK')"
-
-# Run the agent eval suite (no LLM calls, just import checks)
-python -m eval.agent_eval --routing
+python -c "import langchain, langgraph, chromadb, gradio; print('All good!')"
 ```
 
-#### Step 9 — Run
+You should see `All good!`. If you see an error, see Troubleshooting.
+
+#### Step 9 — Generate the demo corpus
 
 ```bash
-source .venv/bin/activate
+python -m domain.demo_corpus.generate_sample
+```
+
+This generates 42 synthetic Office documents in `domain/demo_corpus/files/` with
+deliberate compliance violations — stale dates, missing owners, retired standards
+references, etc. This is what you'll audit in the demo.
+
+#### Step 10 — Launch DAVE
+
+```bash
 python main.py
 ```
 
-Open [http://localhost:7860](http://localhost:7860) in your browser.
+Open your **Windows browser** (Chrome, Edge, Firefox) and go to:
 
-For a non-UI smoke test:
+**[http://localhost:7860](http://localhost:7860)**
 
-```bash
-python main.py --query "What is RAG?"
-```
+You should see the DAVE dashboard with three tabs.
 
 ---
 
-### Option B — Linux / macOS
+### Option B — macOS
 
 ```bash
-# Install Python 3.11 if not present
-# Ubuntu/Debian:
-sudo apt install -y python3.11 python3.11-venv python3.11-dev build-essential
-
-# macOS (Homebrew):
+# Install Python 3.11
 brew install python@3.11
 
-# (Optional) Install Ollama
-curl -fsSL https://ollama.ai/install.sh | sh
-ollama serve &
-ollama pull llama3.2
-ollama pull nomic-embed-text
-
 # Clone and install
-git clone https://github.com/MarcLVR/SOTA_AAI.git
-cd SOTA_AAI
+git clone https://github.com/OAPMaaS/dave.git
+cd dave
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
@@ -284,9 +410,28 @@ pip install -r requirements.txt
 
 # Configure
 cp .env.example .env
-# edit .env — set LLM_PROVIDER + the corresponding API key
+# Edit .env and add your ANTHROPIC_API_KEY and GROQ_API_KEY
 
-# Run
+# Generate demo corpus and run
+python -m domain.demo_corpus.generate_sample
+python main.py
+```
+
+### Option C — Linux
+
+```bash
+# Ubuntu / Debian
+sudo apt install -y python3.11 python3.11-venv python3.11-dev build-essential
+
+git clone https://github.com/OAPMaaS/dave.git
+cd dave
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+cp .env.example .env
+# Edit .env and add your keys
+python -m domain.demo_corpus.generate_sample
 python main.py
 ```
 
@@ -294,551 +439,459 @@ python main.py
 
 ## Environment variables reference
 
-All variables are read by `config/settings.py` via `pydantic-settings`. They can be set in `.env` or exported as shell environment variables (shell takes precedence).
+All variables are read from `.env` by `config/settings.py`. Shell environment
+variables override `.env` values.
 
-### LLM provider
+### LLM providers
 
-| Variable | Default | Description |
+| Variable | Default | Notes |
 |---|---|---|
-| `LLM_PROVIDER` | `gemini` | Global default provider: `gemini` \| `groq` \| `ollama` |
-| `GOOGLE_API_KEY` | — | Required when provider is `gemini`. Get at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model name |
-| `GROQ_API_KEY` | — | Required when provider is `groq`. Get at [console.groq.com/keys](https://console.groq.com/keys) |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model name |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `LLM_PROVIDER` | `anthropic` | Active provider: `anthropic` · `groq` · `ollama` |
+| `ANTHROPIC_API_KEY` | — | Required. Get at [console.anthropic.com](https://console.anthropic.com) |
+| `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | Default model for all Anthropic roles |
+| `GROQ_API_KEY` | — | Required for the critic. Get at [console.groq.com](https://console.groq.com) |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server (local LLM) |
 | `OLLAMA_MODEL` | `llama3.2` | Ollama chat model |
-| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model (used by RAG + Mem0) |
-| `ANTHROPIC_API_KEY` | — | Optional fallback — not used by default routing |
-| `OPENAI_API_KEY` | — | Optional fallback — not used by default routing |
+| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Embedding model (RAG + Mem0) |
 
-### Per-role provider overrides
+### Per-role overrides
 
-Any role can be pinned to a specific provider. The env var pattern is `ROLE_PROVIDER_<ROLE>`:
+Pin any role to a specific provider or model:
 
 ```env
-ROLE_PROVIDER_CRITIC=groq       # critic runs on Groq (low-latency scoring)
-ROLE_PROVIDER_AUDITOR=groq      # auditor runs on Groq (high volume)
-ROLE_PROVIDER_SUPERVISOR=gemini # supervisor uses Gemini (structured reasoning)
+ROLE_PROVIDER_CRITIC=groq               # fast scoring — no need to pay Anthropic
+ROLE_PROVIDER_SUPERVISOR=anthropic      # strong structured output
+ROLE_MODEL_EXECUTOR=claude-sonnet-4-6  # stronger model for document rewriting
 ```
 
-Valid roles: `supervisor`, `researcher`, `coder`, `general`, `auditor`, `critic`.
+Valid roles: `supervisor` `researcher` `coder` `general` `auditor` `critic` `executor`
 
 ### Agent behaviour
 
 | Variable | Default | Description |
 |---|---|---|
-| `MAX_SUPERVISOR_ROUNDS` | `5` | Hard cap on supervisor re-routing loops per turn |
-| `MAX_ITERATIONS` | `10` | Max ReAct iterations per specialist agent per turn |
-| `TEMPERATURE` | `0.0` | Sampling temperature for all LLM calls |
-| `CRITIC_REVISION_THRESHOLD` | `0.70` | Critic score below this → send back for revision |
-| `CRITIC_MAX_REVISIONS` | `2` | Max revision cycles before forcing FINISH |
-
-### RAG and memory
-
-| Variable | Default | Description |
-|---|---|---|
-| `CHROMA_PERSIST_DIR` | `./data/chroma_db` | ChromaDB persistence directory |
-| `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace embedding model for RAG |
-| `TOP_K_RETRIEVAL` | `5` | Number of chunks returned per RAG query |
-
-### Guardrails
-
-| Variable | Default | Description |
-|---|---|---|
-| `GUARDRAIL_MAX_INPUT_LENGTH` | `8000` | Input length limit in characters before truncation |
-| `GUARDRAIL_REDACT_PII` | `true` | Regex-based PII redaction (emails, phone numbers, etc.) |
+| `MAX_SUPERVISOR_ROUNDS` | `5` | Hard cap on routing loops per turn |
+| `TEMPERATURE` | `0.0` | Deterministic outputs — reliable structured JSON |
+| `CRITIC_REVISION_THRESHOLD` | `0.70` | Score below this triggers a revision pass |
+| `CRITIC_MAX_REVISIONS` | `2` | Maximum revision rounds per turn |
 
 ### Observability
 
-| Variable | Default | Description |
-|---|---|---|
-| `LANGFUSE_PUBLIC_KEY` | — | Activates Langfuse cloud tracing when set |
-| `LANGFUSE_SECRET_KEY` | — | Required with `LANGFUSE_PUBLIC_KEY` |
-| `LANGFUSE_HOST` | `https://cloud.langfuse.com` | Langfuse endpoint (override for self-hosted) |
-| `LANGCHAIN_API_KEY` | — | Activates LangSmith tracing when set |
-
-### MCP
-
-| Variable | Default | Description |
-|---|---|---|
-| `MCP_FILESYSTEM_ROOT` | `./data/uploads` | Root directory exposed to filesystem MCP tools |
-
-### DAVE standalone modules (chase / scripts)
-
-These variables are only needed when running the Telegram notifier, database layer,
-or utility scripts. They are not read by `main.py` or the LangGraph graph.
-
-| Variable | Default | Description |
-|---|---|---|
-| `TELEGRAM_BOT_TOKEN` | — | BotFather token for `chase/telegram_bot.py` |
-| `TELEGRAM_LUCA_CHAT_ID` | — | Telegram chat ID for owner `luca` |
-| `TELEGRAM_NACHO_CHAT_ID` | — | Telegram chat ID for owner `nacho` |
-| `TELEGRAM_MARC_CHAT_ID` | — | Telegram chat ID for owner `marc` |
-| `TELEGRAM_AUGUSTO_CHAT_ID` | — | Telegram chat ID for owner `augusto` |
-| `DB_HOST` | `postgres` | PostgreSQL host for `chase/db.py` |
-| `DB_PORT` | `5432` | PostgreSQL port |
-| `DB_NAME` | `dave` | PostgreSQL database name |
-| `DB_USER` | `dave` | PostgreSQL user |
-| `DB_PASSWORD` | — | PostgreSQL password |
-| `PMAAS_CREDENTIALS` | `~/.pmaas/credentials` | Shell-export credential file (overrides DB vars) |
-| `TEST_DOCS_DIR` | `test_docs/` (repo root) | Output directory for `scripts/generate_synthetic.py` |
-| `WEB_DATA_DIR` | `test_docs/` (repo root) | Web export copy target for generated documents |
-| `EXPORT_OUT_PATH` | `data/export_results.json` | JSON export path for `scripts/export_results.py` |
+| Variable | Notes |
+|---|---|
+| `LANGFUSE_PUBLIC_KEY` | Activates Langfuse cloud tracing when set |
+| `LANGFUSE_SECRET_KEY` | Required with public key |
+| `LANGFUSE_HOST` | Default: `https://cloud.langfuse.com` |
+| `LANGCHAIN_API_KEY` | Activates LangSmith tracing when set |
 
 ---
 
-## Agent guide — what to ask each agent
+## Demo guide
 
-The supervisor routes automatically based on your question.
+> This section walks you through a compelling 10-minute demo. Follow the acts in
+> order — each one builds on the previous.
 
-### Researcher
+### Pre-demo checklist
 
-Best for: finding information, summarising topics, literature reviews, fact-checking.
-
-```
-"What are the most cited papers on RAG from 2024?"
-"Find recent news about LLaMA model releases"
-"What did the paper I uploaded say about model evaluation?"
-```
-
-### Coder
-
-Best for: writing and executing Python code, data analysis, plots.
-
-```
-"Write a Python function to compute a confusion matrix and plot it"
-"Debug this code: [paste your code]"
-"Implement a logistic regression with cross-validation using scikit-learn"
-```
-
-> Code runs locally in a sandbox — it cannot access the internet or your filesystem
-> outside `data/uploads/`.
-
-### General
-
-Best for: reasoning, explanation, writing, analysis, brainstorming.
-
-Uses episodic memory — remembers facts you tell it across sessions.
-
-```
-"Explain the difference between RAG and fine-tuning"
-"My name is Marc and I work in credit risk — remember this"
-"What do you know about me?"
-"Help me design the architecture for a document Q&A system"
-```
-
-### Auditor
-
-Best for: AI-readiness scanning, data hygiene audits, governance gap analysis.
-
-Runs a deterministic pipeline: crawl → extract (pdf/docx/xlsx/pptx) → score
-staleness, template compliance, and governance metadata → aggregate into a
-corpus dashboard.
-
-```
-"Audit the documents in /path/to/folder for AI-readiness"
-"Which files in my SharePoint export need supervision?"
-"Check domain/demo_corpus/files and tell me the top offenders"
-"Inspect this single contract for governance gaps: contracts/nda_2019.docx"
-```
-
-The auditor returns:
-- Headline: total documents, total size, % needing supervision, estimated remediation hours
-- Staleness: stale/cold counts, oldest document
-- Standards: non-standard formats, missing required sections, retired-standard references
-- Governance: files with no owner, unclassified files
-- Top offenders by trust score with the single worst finding per file
-
----
-
-## AI-Readiness Auditor — domain layer
-
-The `domain/` package is a standalone auditing engine the Auditor agent calls.
-It can also be run directly:
+Run these before your audience arrives:
 
 ```bash
-# Full corpus audit
+# 1. Make sure the demo corpus is generated
+ls domain/demo_corpus/files/ | wc -l
+# Should print 42
+
+# 2. Start the app and confirm it loads
+source .venv/bin/activate
+python main.py
+# Open http://localhost:7860 — you should see all 3 tabs
+
+# 3. Run a quick smoke test
+python main.py --query "Hello"
+# Should respond without errors
+```
+
+Keep the browser open on **Tab 1 (🔍 Scan)** when your audience arrives.
+
+---
+
+### Act 1 — The instant audit (Tab 1: Scan) ⏱ 2 min
+
+**What to say:** *"This is the dashboard. It audits your entire document repository
+in seconds — no AI, no API calls, no quotas. Just fast Python."*
+
+1. The folder path field already shows `domain/demo_corpus/files`
+2. Click **Run Audit**
+3. In about 1 second, the hero number appears — a large coloured percentage
+
+**What to point out:**
+- The big percentage (e.g. "45%") is the share of documents that need human review
+  before going into a RAG pipeline
+- The stat cards show total documents, total size, flagged size, and estimated
+  remediation time in hours
+- The **Top reasons bar chart** on the left shows the breakdown: governance gaps
+  dominate, then staleness, then standards issues
+- The **By document type** chart on the right shows which types have the most
+  problems (contracts and data dictionaries tend to be worst)
+
+4. Check the **Extrapolate toggle** — watch the numbers multiply by 30,000
+5. **What to say:** *"This sample has 42 documents. If your full SharePoint has
+   30,000 documents and the same pattern holds, this is what you're dealing with."*
+
+---
+
+### Act 2 — Document drill-in (Tab 2: Documents) ⏱ 2 min
+
+**What to say:** *"Now let's see exactly which documents are causing the problems."*
+
+1. Click the **📋 Documents** tab
+2. The table shows all 42 documents sorted by trust score — worst at the top
+3. The first row has a 🔴 badge — click on it
+
+**What to point out in the detail panel:**
+- The **Staleness findings** section shows exactly why it's stale, with the age in
+  days and the expected review cadence for that document type
+- The **Standards findings** section shows the specific retired standard references
+  found in the body text
+- The **Governance findings** section lists missing metadata fields
+- The sub-scores at the bottom show the raw 0–1 values for each dimension
+
+4. Try clicking a row with a 🟡 badge to show the contrast — not terrible, but
+   fixable
+5. Try clicking a row with a 🟢 badge — a clean document as a baseline
+
+---
+
+### Act 3 — Ask the AI (Tab 3: Ask the agent) ⏱ 4 min
+
+**What to say:** *"The dashboard gives you the raw data. Now let's ask the AI what
+to actually do with it."*
+
+Click the **🤖 Ask the agent** tab. Use these prompts in order:
+
+**Prompt 1 — The audit question:**
+```
+Audit the documents in domain/demo_corpus/files and tell me which 3 issues
+to fix first if I want to safely use this corpus in a RAG system
+```
+
+Watch the trace panel on the right as you wait:
+- `🔀 Supervisor → auditor` — the AI routes to the right specialist
+- `🔧 run_full_audit` — the audit tool runs (the same pipeline from Tab 1)
+- `✅ Critic score=XX%` — the critic evaluates the response quality
+
+**What to say while it runs:** *"Notice the trace panel. You can see the AI routing
+decision and its reasoning. The critic on the right is a separate AI that scores
+the answer before it reaches you — this is Reflexion, a technique from a 2023
+Stanford paper."*
+
+**Prompt 2 — Memory:**
+```
+My company's biggest concern is GDPR compliance. Remember this.
+```
+
+Then immediately:
+```
+Given what you know about my priorities, which document in the corpus
+is the most dangerous for us right now?
+```
+
+**What to say:** *"It remembered the context from the previous message and applied
+it to a new question. This works across sessions — close the browser and come back
+tomorrow, and it still knows your priorities."*
+
+**Prompt 3 — Research (optional, if time permits):**
+```
+Search for the current EU AI Act requirements for high-risk AI systems
+and tell me which of our compliance documents might need updating
+```
+
+Watch the researcher agent run `web_search` multiple times, then synthesise
+a response with cited sources.
+
+---
+
+### Act 4 — Show the Reflexion loop ⏱ 1 min
+
+This sometimes happens naturally during Act 3. If you see a `🔁` in the trace
+panel, point it out:
+
+**What to say:** *"See the 🔁? The critic scored the first response below 0.70 —
+not good enough. It sent the agent back with specific feedback. The agent tried
+again. This is why the answers are higher quality than a basic chatbot."*
+
+If it didn't happen naturally, you can trigger it by asking a deliberately
+open-ended question:
+```
+Summarise everything
+```
+
+---
+
+### Act 5 — Human-in-the-loop (optional, impressive for governance audiences) ⏱ 1 min
+
+1. Tick the **🔒 Enable human-in-the-loop review** checkbox in the right panel
+2. Send any message
+3. When the approval panel appears, point it out
+
+**What to say:** *"In a production governance workflow, no AI response goes to a
+user without a human seeing it first. The graph literally pauses — the state is
+checkpointed to disk — and waits for your approval. If you reject it with
+feedback, the agent revises and comes back."*
+
+4. Click **Reject** and type `Make it shorter`
+5. Watch the agent revise
+6. Click **Approve**
+
+---
+
+### Demo recovery — if something goes wrong
+
+| Problem | Quick fix |
+|---|---|
+| Blank page at localhost:7860 | Wait 20 seconds — the first startup is slow while the embedding model loads |
+| "Error: ANTHROPIC_API_KEY not set" | Check `.env` has the key; run `source .venv/bin/activate` first |
+| Audit returns 0 documents | Run `python -m domain.demo_corpus.generate_sample` first |
+| Agent gives no response | Check the terminal for error messages; most common cause is a missing API key |
+| "Multiple system messages" error | Ensure you're on the latest commit: `git pull && python main.py` |
+
+---
+
+## Auditor CLI — running outside the UI
+
+The audit pipeline works standalone, no UI needed:
+
+```bash
+# Audit any folder
 python -m domain.run_audit /path/to/your/documents
 
-# Machine-readable JSON output
+# JSON output (pipe to jq, save to file, send to an API)
 python -m domain.run_audit /path/to/your/documents --json
 
-# Save JSON to file
-python -m domain.run_audit /path/to/your/documents --json report.json
-
-# Show top 20 offenders
+# Show top 20 worst documents
 python -m domain.run_audit /path/to/your/documents --top 20
 
-# Regenerate the 42-file demo corpus and audit it
+# Regenerate the 42-file demo corpus
 python -m domain.demo_corpus.generate_sample
-python -m domain.run_audit domain/demo_corpus/files
 ```
 
-> **Synthetic data notice:** All documents in `domain/demo_corpus/` and `test_docs/`, and any
-> findings they produce, are entirely synthetic — generated by `domain/demo_corpus/generate_sample.py`
-> and `scripts/generate_synthetic.py`. They contain no real personal data.
+> **Synthetic data:** All documents in `domain/demo_corpus/` and `test_docs/` are
+> entirely synthetic, generated by `domain/demo_corpus/generate_sample.py` and
+> `scripts/generate_synthetic.py`. They contain no real personal data.
 
-### Pipeline internals
+### Trust score weights
 
-`domain/run_audit.py::audit_repository()` runs a pure-Python pipeline with no LLM calls:
-
-```
-crawl_repository(folder)
-  └─ os.walk + stat → list of {path, name, doc_type, extension, size_bytes, modified_at, accessed_at}
-
-For each file:
-  extract_document(path)
-    └─ python-docx / openpyxl / python-pptx / pypdf / csv / json / txt
-    └─ returns {text, embedded_metadata, extraction_ok}
-
-  score_staleness(doc_type, modified_at, accessed_at, content_text)
-    └─ compares age to STALENESS_THRESHOLDS_DAYS per doc type
-    └─ checks file access coldness and overdue review dates in text
-    └─ returns {staleness_score, is_stale, is_cold, age_days, findings[]}
-
-  check_standards(doc_type, extension, text)
-    └─ verifies extension in STANDARD_FORMATS per doc type
-    └─ checks required headings from REQUIRED_SECTIONS
-    └─ scans text for retired standard references from RETIRED_STANDARDS
-    └─ returns {standards_score, is_standard_format, missing_sections[], retired_standard_hits[], findings[]}
-
-  check_governance(doc_type, embedded_metadata, text)
-    └─ looks for REQUIRED_METADATA fields in both embedded metadata and inline text
-    └─ validates classification labels, owner fields, retention dates
-    └─ returns {governance_score, has_owner, classification_valid, missing_fields[], findings[]}
-
-  compute_trust_score(staleness_score, standards_score, governance_score)
-    └─ weighted sum per SCORE_WEIGHTS → trust_score in [0, 1]
-    └─ trust_score < SUPERVISION_THRESHOLD → needs_supervision = True
-
-aggregate_findings(document_results)
-  └─ corpus-level dashboard: headline, staleness summary, standards summary,
-     governance summary, reasons breakdown, by_doc_type, top_offenders,
-     oldest_5, largest_5, estimated_remediation_hours
-```
-
-### Trust score
-
-Each document gets a `trust_score` in [0, 1] computed as a weighted combination:
-
-| Signal | Weight | What it checks |
+| Signal | Weight | What it measures |
 |---|---|---|
-| Staleness | 40% | Age vs type-specific review cadence; access coldness; overdue review dates in body |
-| Standards | 35% | Required sections present; standard format (.docx/.xlsx/.pptx/.pdf); retired standard refs |
-| Governance | 25% | Owner, classification, retention, review date in metadata or inline |
+| Staleness | 40% | Age vs type-specific review cadence; cold access; overdue review dates in body |
+| Standards | 35% | Required headings; standard file format; retired standard references |
+| Governance | 25% | Owner field; classification label; retention date; review date |
 
-Documents below **0.70** are flagged for supervision.
-
-### Supported document types
-
-`.pdf` · `.docx` · `.xlsx` · `.pptx` · `.csv` · `.json` · `.txt` · `.md`
-
-Structured exports (Asana JSON, Business Central CSV) are summarised and scored.
-
-### Tuning
-
-Edit `domain/knowledge.py` to adjust:
-- `STALENESS_THRESHOLDS_DAYS` — review cadence per doc type
-- `RETIRED_STANDARDS` — retired/superseded standard triggers
-- `REQUIRED_SECTIONS` — required headings per doc type
-- `REQUIRED_METADATA` — governance fields per doc type
-- `SCORE_WEIGHTS` — staleness/standards/governance weighting
-- `SUPERVISION_THRESHOLD` — trust score cutoff (default 0.70)
+Documents below **0.70** are flagged. Adjust in `domain/knowledge.py`.
 
 ---
 
-## Reflexion — how the self-critique loop works
+## DAVE notification pipeline (standalone modules)
 
-After every specialist responds, the **Critic** node evaluates the response:
-
-1. Scores it 0.0–1.0 using structured output (`CriticDecision`)
-2. If score < `CRITIC_REVISION_THRESHOLD` (default 0.70) → injects the critique as a system hint and sends back to the same specialist for revision
-3. If score ≥ 0.70 → accepts the response and advances to HITL
-4. Maximum `CRITIC_MAX_REVISIONS` (default 2) revision rounds — prevents infinite loops
-
-The critic prompt instructs the LLM to score on: factual accuracy, completeness, relevance, and format. The `CriticDecision.reasoning` field is surfaced in the Gradio trace panel so you can see exactly why a response was revised.
-
----
-
-## Human-in-the-Loop (HITL)
-
-Toggle **"Enable HITL"** in the UI before sending a message.
-
-1. Agent generates a response; critic scores it
-2. Execution pauses via `langgraph.types.interrupt()` — state is checkpointed to SQLite
-3. An approval panel appears in the Gradio UI
-4. Click **Approve** to accept, or type feedback and click **Reject** to inject the feedback as a new user message and resume
-
-Under the hood, the UI calls `resume_after_hitl(thread_id, approved=True/False, feedback="...")` which calls `graph.update_state()` and then streams the graph continuation from the checkpoint.
-
----
-
-## Episodic Memory
-
-Tell the agent facts; it remembers them across sessions via Mem0 + Ollama embeddings.
-
-```
-"Remember that I prefer concise answers with code examples"
-"I am based in Spain and work under EU regulations"
-"What do you know about my preferences?"
-```
-
-Facts persist in `data/chroma_db/mem0` across restarts.
-
-**How it works:** `memory/episodic.py` exposes two LangChain tools injected into every agent:
-- `remember(fact: str)` — calls `mem0.add()` which embeds the fact and stores it in the local Chroma collection
-- `recall(query: str)` — calls `mem0.search()` which does a cosine similarity search and returns the top-k relevant facts
-
-Embeddings use Ollama `nomic-embed-text`. If Ollama is not running, episodic memory silently degrades (tools return empty).
-
----
-
-## Observability
-
-Langfuse tracing is activated when `LANGFUSE_PUBLIC_KEY` is set in `.env`.
-LangSmith tracing is activated when `LANGCHAIN_API_KEY` is set.
-Without either, all events are logged to the terminal:
-
-```
-[supervisor] round=1 → auditor | document audit request
-[tool] ▶ run_full_audit({'folder_path': 'domain/demo_corpus/files'})
-[tool] ✓ content='{"headline": {"total_documents": 42 ...
-[critic] score=0.85 revise=False
-```
-
-All callbacks are injected via `observability/tracer.py::get_callbacks()` which is called once at graph build time. The callback list is passed in the `config` dict to every `graph.invoke()` / `graph.stream()` call — no monkey-patching.
-
----
-
-## Evals
-
-```bash
-source .venv/bin/activate
-
-# Routing accuracy + e2e keyword tests (fast, ~20 s)
-python -m eval.agent_eval
-
-# Routing only (no LLM calls, import-level check)
-python -m eval.agent_eval --routing
-
-# RAGAS metrics — requires a running LLM and Ollama embeddings
-python -m eval.rag_eval
-```
-
-Results are written to `eval/results/`.
-
----
-
-## DAVE standalone modules
-
-These files live in the repo but are **not yet wired into the main graph or `main.py`**.
-They work as standalone scripts and will be integrated in a future pass.
+These modules exist in the repo and can be run independently. They are not yet
+wired into the main LangGraph graph.
 
 ### `chase/` — Telegram notification layer
 
-| File | Purpose |
-|---|---|
-| `chase/notifier.py` | Formats a finding and sends it to the document owner via Telegram; creates a DB run; saves a local findings cache |
-| `chase/telegram_bot.py` | `python-telegram-bot` polling bot — handles `/start` and four inline callbacks: **Fix** (triggers executor), **Manual**, **Ignore**, **Info** |
-| `chase/db.py` | PostgreSQL layer (`psycopg2`) — `validation_runs`, `findings`, and `owner_map` tables; full CRUD for runs and findings |
-| `chase/findings_cache.json` | Local JSON cache mapping `run_id → {document, findings}` for bot info callbacks when DB is unavailable |
+When a finding is detected, `notifier.py` sends the document owner a Telegram
+message with four inline buttons: **Fix** (triggers the executor ReAct loop),
+**Manual** (marks for human action), **Ignore**, and **Info** (shows full findings).
 
-Additional dependency: `pip install python-telegram-bot psycopg2-binary`
-
-### `agents/connector.py` — multi-format document parser
-
-Standalone parser that normalises PDF, DOCX, XLSX, and PPTX into a common `DocumentSchema` dict:
-
-```
-{filename, format, text, metadata{title,author,created,modified,...},
- sections[{heading,content}], tables[[rows]], images_count, notes, error}
+```bash
+# Run the bot (requires TELEGRAM_BOT_TOKEN in .env)
+python chase/telegram_bot.py
 ```
 
-Used by `scripts/test_pipeline.py`. Will replace/complement `domain/tools/extractor.py` in a later pass.
+Required env vars: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_<NAME>_CHAT_ID` for each owner,
+`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`.
 
-Additional dependency: `pip install pdfplumber`
+Additional install: `pip install python-telegram-bot psycopg2-binary`
 
 ### `agents/executor.py` — ReAct auto-fix loop
 
-Triggered when an owner taps **"Fix"** in Telegram. Runs up to `MAX_ATTEMPTS=3` ReAct
-iterations (Thought → Action → Observation) per finding, calling Groq or Anthropic.
-Updates the run status to `fixed` or `partial_fix` on completion.
+When an owner approves a fix via Telegram, the executor runs up to 3 ReAct
+iterations per finding (Thought → Action → Observation), using Claude Sonnet
+(`ROLE_MODEL_EXECUTOR=claude-sonnet-4-6`) for quality document rewriting.
 
-### `scripts/` — utility scripts
+### `scripts/` — utilities
 
-| Script | Usage |
-|---|---|
-| `scripts/generate_synthetic.py` | Generates 8 synthetic DOCX/PDF/PPTX documents with deliberate compliance violations into `test_docs/`. Outputs `manifest.json` with expected findings per document. |
-| `scripts/test_pipeline.py` | End-to-end smoke test: connector → regex PII critic → db → notifier → Telegram. Run with `python scripts/test_pipeline.py [doc_path]`. |
-| `scripts/export_results.py` | Queries PostgreSQL and writes all runs + findings to `data/export_results.json` (or `$EXPORT_OUT_PATH`). Designed to run in a loop (`while true; do python scripts/export_results.py; sleep 60; done`). |
+```bash
+# Generate the 8-document synthetic test corpus with known violations
+python scripts/generate_synthetic.py
 
-### `test_docs/` — synthetic test corpus
+# End-to-end pipeline smoke test: connector → PII critic → DB → notifier
+python scripts/test_pipeline.py [optional/path/to/doc.docx]
 
-8 pre-generated documents with known compliance violations for pipeline testing:
-
-| File | Violations |
-|---|---|
-| `contrato_juan_garcia_2024.docx` | PII exposed (DNI, email, phone) |
-| `2026-06-01_contrato_limpio.docx` | Clean baseline (no violations) |
-| `kickoff_proyecto_alpha.pptx` | Phone number in slides, TBD/TODO placeholders |
-| `spec_autenticacion_v0.docx` | Placeholder content, non-standard filename |
-| `gdpr_policy_draft.docx` | Missing governance sections |
-| `api_design_FINAL_v2.pdf` | Non-standard naming |
-| `informe_ventas_Q1_2026.pdf` | Missing owner metadata |
-| `Q1_Results_Deck.pptx` | Stale content |
-| `manifest.json` | Expected findings per document (used by test_pipeline.py) |
+# Export all validation runs and findings from PostgreSQL to JSON
+python scripts/export_results.py
+```
 
 ---
 
 ## Project structure
 
 ```
-SOTA_AAI/
-├── main.py                      # entrypoint — UI / CLI / single query
+dave/
+├── main.py                      # entry point — UI / CLI / single query
 ├── requirements.txt
-├── .env.example
+├── .env.example                 # copy to .env and fill in your keys
+│
 ├── config/
-│   └── settings.py              # pydantic-settings config singleton
+│   └── settings.py              # all env vars → pydantic Settings object
+│
 ├── agents/
-│   ├── llm.py                   # LLM factory — Gemini / Groq / Ollama, per-role override
-│   ├── supervisor.py            # structured routing (SupervisorDecision)
-│   ├── researcher.py            # web search + RAG ReAct agent
-│   ├── coder.py                 # Python REPL ReAct agent
-│   ├── general.py               # catch-all reasoning + episodic memory
-│   ├── auditor.py               # AI-readiness auditor ReAct agent
-│   ├── critic.py                # Reflexion critic (CriticDecision)
-│   ├── connector.py             # [standalone] multi-format doc parser (PDF/DOCX/XLSX/PPTX)
-│   └── executor.py              # [standalone] ReAct auto-fix loop (Telegram → approve → fix)
+│   ├── llm.py                   # LLM factory: Anthropic / Groq / Ollama, per-role routing
+│   ├── supervisor.py            # routes conversation to the right specialist
+│   ├── researcher.py            # web search + RAG agent
+│   ├── coder.py                 # sandboxed Python REPL agent
+│   ├── general.py               # reasoning + episodic memory agent
+│   ├── auditor.py               # calls domain pipeline, summarises findings
+│   ├── critic.py                # Reflexion scorer (0–1, structured output)
+│   ├── connector.py             # [standalone] multi-format doc parser
+│   └── executor.py              # [standalone] ReAct auto-fix loop
+│
 ├── graph/
-│   ├── state.py                 # AgentState TypedDict
-│   └── workflow.py              # LangGraph builder — full SOTA topology
+│   ├── state.py                 # AgentState TypedDict (shared by all nodes)
+│   └── workflow.py              # LangGraph builder + node factory
+│
 ├── tools/
-│   ├── web_search.py
-│   ├── code_executor.py
-│   ├── file_tools.py
-│   └── audit_tools.py           # @tool wrappers for domain audit pipeline
-├── domain/                      # AI-readiness auditor domain layer (no LLM calls)
-│   ├── knowledge.py             # thresholds, retired standards, required sections
-│   ├── prompts.py               # inspector / auditor system prompts
-│   ├── run_audit.py             # CLI + programmatic API: python -m domain.run_audit <folder>
+│   ├── web_search.py            # DuckDuckGo search
+│   ├── code_executor.py         # sandboxed subprocess Python REPL
+│   ├── file_tools.py            # read / write / list
+│   └── audit_tools.py           # @tool wrappers for the domain pipeline
+│
+├── domain/                      # AI-readiness audit engine (zero LLM calls)
+│   ├── knowledge.py             # review cadences, retired standards, required sections
+│   ├── run_audit.py             # CLI + programmatic API
 │   ├── tools/
 │   │   ├── crawler.py           # os.walk + stat inventory
-│   │   ├── extractor.py         # pdf/docx/xlsx/pptx/csv/json text + metadata
-│   │   ├── staleness.py         # age / cold / overdue-date scoring
+│   │   ├── extractor.py         # text + metadata extraction
+│   │   ├── staleness.py         # age / cold / overdue scoring
 │   │   ├── standards.py         # section compliance + retired-ref detection
 │   │   ├── governance.py        # owner / classification / retention checks
-│   │   └── aggregate.py         # per-doc trust_score + corpus dashboard
+│   │   └── aggregate.py         # trust_score + corpus dashboard
 │   └── demo_corpus/
-│       ├── generate_sample.py   # generates 42-file realistic Office corpus
-│       └── files/               # generated .docx/.xlsx/.pptx/.txt/.json/.csv
+│       ├── generate_sample.py   # generates 42-file synthetic corpus
+│       └── files/               # generated documents (gitignored after generation)
+│
 ├── memory/
-│   ├── vector_store.py          # ChromaDB + HF embeddings (semantic RAG)
+│   ├── vector_store.py          # ChromaDB + HuggingFace embeddings
 │   └── episodic.py              # Mem0 episodic memory
+│
 ├── guardrails/
-│   └── io_guards.py             # prompt injection detection · PII redaction
+│   └── io_guards.py             # injection detection + PII redaction
+│
 ├── observability/
-│   └── tracer.py                # Langfuse callback + ConsoleTracer
+│   └── tracer.py                # Langfuse callbacks + ConsoleTracer
+│
 ├── eval/
-│   ├── agent_eval.py            # routing accuracy + e2e eval harness
+│   ├── agent_eval.py            # routing accuracy + e2e tests
 │   └── rag_eval.py              # RAGAS metrics
-├── mcp_servers/
-│   ├── config.py
-│   └── loader.py                # MCP tool loader (experimental)
+│
 ├── ui/
-│   └── app.py                   # Gradio 6.x streaming UI
-├── chase/                       # [standalone] Telegram notifier + PostgreSQL layer
-│   ├── telegram_bot.py          # polling bot — /start + fix/manual/ignore/info callbacks
-│   ├── notifier.py              # send_finding() → Telegram + DB run creation
-│   ├── db.py                    # psycopg2 CRUD for validation_runs / findings / owner_map
-│   └── findings_cache.json      # local run_id → findings cache for bot info callbacks
-├── scripts/                     # [standalone] utility scripts
-│   ├── generate_synthetic.py    # generate 8 synthetic test docs with known violations
-│   ├── test_pipeline.py         # end-to-end smoke test: connector → critic → db → notifier
-│   └── export_results.py        # export DB runs+findings to data/export_results.json
-├── test_docs/                   # synthetic corpus (8 docs + manifest.json)
+│   └── app.py                   # Gradio 6.x — 3-tab dashboard
+│
+├── chase/                       # [standalone] Telegram notifier + PostgreSQL
+│   ├── telegram_bot.py
+│   ├── notifier.py
+│   └── db.py
+│
+├── scripts/                     # [standalone] utilities
+│   ├── generate_synthetic.py
+│   ├── test_pipeline.py
+│   └── export_results.py
+│
+├── test_docs/                   # 8 synthetic documents + manifest.json
+│
 └── data/
-    ├── chroma_db/               # persisted vector stores + SQLite checkpoints
-    └── uploads/                 # sandboxed file workspace
+    ├── chroma_db/               # vector store + SQLite conversation checkpoints
+    └── uploads/                 # sandboxed workspace for code execution
 ```
 
 ---
 
 ## Troubleshooting
 
-**`Command 'python' not found`** — activate the venv: `source .venv/bin/activate`
+**`(.venv)` is not in my prompt** — The virtual environment is not active.
+Run `source .venv/bin/activate` from the `dave/` folder. You must do this every
+time you open a new terminal.
 
-**`ModuleNotFoundError` after install** — confirm you are using Python 3.11, not 3.12+:
+**`python: command not found`** — Try `python3.11` instead. If neither works,
+the venv is not active.
+
+**`ModuleNotFoundError`** — Wrong Python version or venv not active. Check:
 ```bash
-python --version   # must be 3.11.x
+python --version  # must be 3.11.x
 ```
 
-**Gemini 429 rate limit** — free tier is 15–20 requests/minute on `gemini-2.5-flash`.
-Switch to Groq for high-volume agents:
-```env
-ROLE_PROVIDER_AUDITOR=groq
-ROLE_PROVIDER_CRITIC=groq
-```
+**`ANTHROPIC_API_KEY not set`** — Open `.env` and make sure the line reads
+`ANTHROPIC_API_KEY=sk-ant-...` with your actual key (not the placeholder text).
 
-**Ollama not reachable** — on Windows check the system tray icon; on Linux run `ollama serve`.
-Test connectivity from inside WSL2: `curl http://localhost:11434/api/tags`
-
-**Episodic memory fails silently** — Mem0 requires Ollama `nomic-embed-text` to be pulled.
+**Audit returns 0 documents** — The demo corpus hasn't been generated yet:
 ```bash
-ollama pull nomic-embed-text
+python -m domain.demo_corpus.generate_sample
 ```
 
-**Model outputs are poor / supervisor loops** — use a larger model.
-For Ollama: `ollama pull llama3.1:8b` and set `OLLAMA_MODEL=llama3.1:8b`.
+**First startup takes a long time** — Normal. On first run, `sentence-transformers`
+downloads the `all-MiniLM-L6-v2` embedding model (~90 MB). This only happens once.
 
-**First startup is slow** — `sentence-transformers` downloads `all-MiniLM-L6-v2` (~90 MB) on first run only. Subsequent starts are fast.
-
-**`sqlite3.OperationalError: database is locked`** — a previous run left the checkpointer open. Kill any other `python main.py` processes:
+**`sqlite3.OperationalError: database is locked`** — Another `main.py` process is
+still running. Kill it:
 ```bash
 pkill -f main.py
 ```
+
+**Critic returns a rate-limit error (Groq 413/429)** — The conversation is too long
+for Groq's free tier. Start a new session by clicking **🔄 New session**, or increase
+your Groq plan. This does not affect the auditor (which uses Anthropic).
 
 ---
 
 ## Key design decisions
 
-**Why LangGraph over pure LCEL?**
-Explicit state, conditional routing, and cycle support — essential for Reflexion loops
-and HITL interrupts that need to pause and resume mid-graph. LCEL chains are DAGs;
-LangGraph supports cycles (supervisor → specialist → critic → supervisor again).
+**Why LangGraph instead of a simple chain?**
+Chains are DAGs — they can't loop. DAVE needs cycles: the Reflexion loop sends
+responses back to the specialist for revision, and HITL pauses mid-graph and resumes
+from a checkpoint. LangGraph's `StateGraph` makes these patterns first-class citizens.
 
-**Why a `run_full_audit` tool instead of per-file agent loops?**
-A ReAct loop over 42 files would make ~170 LLM calls and hit free-tier rate limits in
-seconds. `run_full_audit` runs the deterministic Python pipeline and surfaces a
-single compact JSON dashboard — the LLM makes 2 calls total (plan → summarise).
+**Why does the audit pipeline use no LLM?**
+Running an LLM over 42 files would make ~170 API calls, cost several dollars, and
+take minutes. The domain pipeline is pure Python — it runs in under a second on the
+same corpus. The LLM's job is to *interpret* the pipeline's output, not to do the
+scanning itself.
 
-**Why role-based provider routing?**
-Supervisor and auditor need strong instruction-following (Gemini); critic needs
-sub-second latency (Groq). `ROLE_PROVIDER_<ROLE>` lets each role use its best model
-without changing shared config.
-
-**Why local embeddings?**
-`sentence-transformers/all-MiniLM-L6-v2` runs on CPU in ~50 ms with no API cost
-and no data leaving the machine.
-
-**Why SQLite checkpointer?**
-Zero-dependency persistence. Swap to `langgraph-checkpoint-postgres` for production.
+**Why Anthropic for agents and Groq for the critic?**
+Claude handles structured-output routing and multi-step tool use reliably.
+The critic only needs to produce a JSON with one float — Groq's Llama-3.3-70B does
+this in ~0.8 seconds for near-zero cost. `ROLE_PROVIDER_<ROLE>` makes this
+switchable without touching code.
 
 **Why `temperature=0.0`?**
-Determinism. Structured output schemas (`SupervisorDecision`, `CriticDecision`) parse
-reliably at temperature 0. Set `TEMPERATURE=0.3` if you want more creative outputs
-from the general agent.
+`SupervisorDecision` and `CriticDecision` are Pydantic models parsed from JSON.
+Determinism at temperature 0 makes these reliable. Set `TEMPERATURE=0.3` in `.env`
+if you want more creative prose from the General agent.
+
+**Why SQLite for the checkpoint?**
+Zero infrastructure. The conversation state is a single file in `data/chroma_db/`.
+For production, swap to `langgraph-checkpoint-postgres` by changing one line in
+`graph/workflow.py`.
 
 ---
 
 ## Roadmap
 
-- [ ] Browser agent via Playwright MCP server
-- [ ] Docker Compose setup (Ollama + app in one command)
-- [ ] Streaming token-by-token output from specialist agents
-- [ ] Multi-turn HITL (back-and-forth revision loop)
-- [ ] LangGraph Studio visual debugger integration
-- [ ] PDF generation for audit reports
+- [ ] Wire `chase/` Telegram pipeline into the main LangGraph graph
 - [ ] SharePoint / OneDrive connector for real-corpus audits
+- [ ] PDF report generation from audit results
+- [ ] Docker Compose: one command to start everything
+- [ ] LangGraph Studio visual debugger integration
+- [ ] Browser agent via Playwright MCP server
+- [ ] Streaming token-by-token output from specialist agents
 
 ---
 
