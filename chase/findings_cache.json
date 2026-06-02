@@ -1,0 +1,93 @@
+{
+  "2": {
+    "document": "contrato_juan_garcia_2024.docx",
+    "findings": [
+      {
+        "title": "PII expuesta: DNI encontrado en página 2",
+        "location": "Sección \"Datos del empleado\", campo Identificación",
+        "suggestion": "Reemplazar con \"[DNI ANONIMIZADO]\" según estándar GDPR",
+        "severity": "high"
+      },
+      {
+        "title": "Nombre completo en cabecera (no necesario)",
+        "location": "Cabecera del documento",
+        "suggestion": "Usar solo iniciales o eliminar según política de privacidad",
+        "severity": "medium"
+      }
+    ]
+  },
+  "1": {
+    "document": "contrato_juan_garcia_2024.docx",
+    "findings": [
+      {
+        "title": "PII expuesta: DNI encontrado en página 2",
+        "location": "Sección \"Datos del empleado\", campo Identificación",
+        "suggestion": "Reemplazar con \"[DNI ANONIMIZADO]\" según estándar GDPR",
+        "severity": "high"
+      },
+      {
+        "title": "Nombre completo en cabecera (no necesario)",
+        "location": "Cabecera del documento",
+        "suggestion": "Usar solo iniciales según política de privacidad",
+        "severity": "medium"
+      }
+    ]
+  },
+  "3": {
+    "document": "contrato_juan_garcia_2024.docx",
+    "findings": [
+      {
+        "title": "PII expuesta: DNI encontrado (12345678A)",
+        "location": "Sección \"4. Firmas\"",
+        "suggestion": "Reemplazar con \"[DNI ANONIMIZADO]\" según estándar GDPR",
+        "severity": "high"
+      },
+      {
+        "title": "PII expuesta: email corporativo (juan.garcia@gmail.com)",
+        "location": "Sección \"4. Firmas\"",
+        "suggestion": "Eliminar o anonimizar direcciones de email en documentos compartibles",
+        "severity": "high"
+      },
+      {
+        "title": "PII expuesta: número de teléfono (+34 612 345 678)",
+        "location": "Sección \"4. Firmas\"",
+        "suggestion": "Eliminar número de teléfono del documento",
+        "severity": "medium"
+      }
+    ]
+  },
+  "4": {
+    "document": "kickoff_proyecto_alpha.pptx",
+    "findings": [
+      {
+        "title": "PII expuesta: número de teléfono (+34 699 887 766)",
+        "location": "Sección \"Objetivos del Proyecto\"",
+        "suggestion": "Eliminar número de teléfono del documento",
+        "severity": "medium"
+      },
+      {
+        "title": "Valores placeholder detectados: PENDIENTE, TBD, TODO",
+        "location": "Múltiples secciones del documento",
+        "suggestion": "Completar todos los campos TBD/TODO/pendiente antes de distribuir",
+        "severity": "medium"
+      }
+    ]
+  },
+  "5": {
+    "document": "spec_autenticacion_v0.docx",
+    "findings": [
+      {
+        "title": "Valores placeholder detectados: TBD, TODO, pendiente",
+        "location": "Múltiples secciones del documento",
+        "suggestion": "Completar todos los campos TBD/TODO/pendiente antes de distribuir",
+        "severity": "medium"
+      },
+      {
+        "title": "Naming convention incorrecto: 'spec_autenticacion_v0.docx'",
+        "location": "Nombre del fichero",
+        "suggestion": "Renombrar siguiendo el estándar YYYY-MM-DD_tipo_nombre",
+        "severity": "low"
+      }
+    ]
+  }
+}
