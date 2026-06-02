@@ -114,16 +114,26 @@ def execute_fix(run_id: int) -> dict:
     if not run:
         return {"success": False, "error": f"Run #{run_id} not found"}
 
-    document = run["document"]
+    # Support both old schema (document) and real DB schema (doc_name)
+    document = run.get("doc_name") or run.get("document", "unknown")
     results = []
 
     for finding in run["findings"]:
-        log.info("Fixing: %s", finding["title"])
+        # Support both old schema (title/suggestion) and real DB schema (rule_code/detail/proposed_fix)
+        finding_label = finding.get("rule_code") or finding.get("title", "finding")
+        finding_fix = finding.get("proposed_fix") or finding.get("suggestion", "")
+
+        log.info("Fixing: %s", finding_label)
         steps = []
         success = False
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
-            step = _react_step(document, finding, attempt)
+            step = _react_step(document, {
+                "title":      finding_label,
+                "location":   finding.get("location", ""),
+                "suggestion": finding_fix,
+                "severity":   finding.get("severity", "medium"),
+            }, attempt)
             steps.append(step)
             log.info("  Attempt %d — done=%s", attempt, step.get("done"))
 
@@ -132,7 +142,7 @@ def execute_fix(run_id: int) -> dict:
                 break
 
         results.append({
-            "finding": finding["title"],
+            "finding": finding_label,
             "success": success,
             "attempts": len(steps),
             "steps": steps,
