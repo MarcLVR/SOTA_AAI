@@ -22,7 +22,8 @@ def launch_ui():
 
     from ui.app import build_ui
     app = build_ui()
-    app.launch(server_name="0.0.0.0", server_port=7860)
+    root_path = os.getenv("GRADIO_ROOT_PATH", "")
+    app.launch(server_name="0.0.0.0", server_port=7860, root_path=root_path)
 
 
 def cli_chat():
