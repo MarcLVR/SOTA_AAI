@@ -135,16 +135,36 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ---------------------------------------------------------------------------
 
 def start_bot_background() -> None:
-    """Start the polling bot in a daemon thread. Silent no-op if token is absent."""
+    """Start the polling bot in a daemon thread. Silent no-op if token is absent.
+
+    Uses the low-level async API instead of run_polling() because run_polling()
+    calls signal.set_wakeup_fd() which only works in the main thread.
+    """
     if not BOT_TOKEN:
         log.warning("TELEGRAM_BOT_TOKEN not set — Telegram bot disabled")
         return
 
     def _run():
+        import asyncio
+
+        async def _async_main():
+            app = Application.builder().token(BOT_TOKEN).build()
+            app.add_handler(CommandHandler("start", start))
+            app.add_handler(CallbackQueryHandler(handle_callback))
+            async with app:
+                await app.start()
+                await app.updater.start_polling(drop_pending_updates=True)
+                log.info("DAVE bot arrancando — @DAVEValidatorBot")
+                await asyncio.Event().wait()  # run until daemon thread is killed
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            main()
+            loop.run_until_complete(_async_main())
         except Exception as exc:
             log.error("Telegram bot crashed: %s", exc)
+        finally:
+            loop.close()
 
     t = threading.Thread(target=_run, daemon=True, name="telegram-bot")
     t.start()
