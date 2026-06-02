@@ -15,6 +15,11 @@ from loguru import logger
 
 
 def launch_ui():
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "chase"))
+    from telegram_bot import start_bot_background
+    start_bot_background()
+
     from ui.app import build_ui
     app = build_ui()
     app.launch(server_name="0.0.0.0", server_port=7860)

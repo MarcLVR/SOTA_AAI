@@ -8,6 +8,7 @@ Stop: Ctrl+C
 import logging
 import os
 import sys
+import threading
 from pathlib import Path
 
 from telegram import Update
@@ -132,6 +133,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+def start_bot_background() -> None:
+    """Start the polling bot in a daemon thread. Silent no-op if token is absent."""
+    if not BOT_TOKEN:
+        log.warning("TELEGRAM_BOT_TOKEN not set — Telegram bot disabled")
+        return
+
+    def _run():
+        try:
+            main()
+        except Exception as exc:
+            log.error("Telegram bot crashed: %s", exc)
+
+    t = threading.Thread(target=_run, daemon=True, name="telegram-bot")
+    t.start()
+    log.info("Telegram bot started in background thread")
+
 
 def main() -> None:
     if not BOT_TOKEN:
