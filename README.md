@@ -363,6 +363,28 @@ Valid roles: `supervisor`, `researcher`, `coder`, `general`, `auditor`, `critic`
 |---|---|---|
 | `MCP_FILESYSTEM_ROOT` | `./data/uploads` | Root directory exposed to filesystem MCP tools |
 
+### DAVE standalone modules (chase / scripts)
+
+These variables are only needed when running the Telegram notifier, database layer,
+or utility scripts. They are not read by `main.py` or the LangGraph graph.
+
+| Variable | Default | Description |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | — | BotFather token for `chase/telegram_bot.py` |
+| `TELEGRAM_LUCA_CHAT_ID` | — | Telegram chat ID for owner `luca` |
+| `TELEGRAM_NACHO_CHAT_ID` | — | Telegram chat ID for owner `nacho` |
+| `TELEGRAM_MARC_CHAT_ID` | — | Telegram chat ID for owner `marc` |
+| `TELEGRAM_AUGUSTO_CHAT_ID` | — | Telegram chat ID for owner `augusto` |
+| `DB_HOST` | `postgres` | PostgreSQL host for `chase/db.py` |
+| `DB_PORT` | `5432` | PostgreSQL port |
+| `DB_NAME` | `dave` | PostgreSQL database name |
+| `DB_USER` | `dave` | PostgreSQL user |
+| `DB_PASSWORD` | — | PostgreSQL password |
+| `PMAAS_CREDENTIALS` | `~/.pmaas/credentials` | Shell-export credential file (overrides DB vars) |
+| `TEST_DOCS_DIR` | `test_docs/` (repo root) | Output directory for `scripts/generate_synthetic.py` |
+| `WEB_DATA_DIR` | `test_docs/` (repo root) | Web export copy target for generated documents |
+| `EXPORT_OUT_PATH` | `data/export_results.json` | JSON export path for `scripts/export_results.py` |
+
 ---
 
 ## Agent guide — what to ask each agent
@@ -603,6 +625,67 @@ Results are written to `eval/results/`.
 
 ---
 
+## DAVE standalone modules
+
+These files live in the repo but are **not yet wired into the main graph or `main.py`**.
+They work as standalone scripts and will be integrated in a future pass.
+
+### `chase/` — Telegram notification layer
+
+| File | Purpose |
+|---|---|
+| `chase/notifier.py` | Formats a finding and sends it to the document owner via Telegram; creates a DB run; saves a local findings cache |
+| `chase/telegram_bot.py` | `python-telegram-bot` polling bot — handles `/start` and four inline callbacks: **Fix** (triggers executor), **Manual**, **Ignore**, **Info** |
+| `chase/db.py` | PostgreSQL layer (`psycopg2`) — `validation_runs`, `findings`, and `owner_map` tables; full CRUD for runs and findings |
+| `chase/findings_cache.json` | Local JSON cache mapping `run_id → {document, findings}` for bot info callbacks when DB is unavailable |
+
+Additional dependency: `pip install python-telegram-bot psycopg2-binary`
+
+### `agents/connector.py` — multi-format document parser
+
+Standalone parser that normalises PDF, DOCX, XLSX, and PPTX into a common `DocumentSchema` dict:
+
+```
+{filename, format, text, metadata{title,author,created,modified,...},
+ sections[{heading,content}], tables[[rows]], images_count, notes, error}
+```
+
+Used by `scripts/test_pipeline.py`. Will replace/complement `domain/tools/extractor.py` in a later pass.
+
+Additional dependency: `pip install pdfplumber`
+
+### `agents/executor.py` — ReAct auto-fix loop
+
+Triggered when an owner taps **"Fix"** in Telegram. Runs up to `MAX_ATTEMPTS=3` ReAct
+iterations (Thought → Action → Observation) per finding, calling Groq or Anthropic.
+Updates the run status to `fixed` or `partial_fix` on completion.
+
+### `scripts/` — utility scripts
+
+| Script | Usage |
+|---|---|
+| `scripts/generate_synthetic.py` | Generates 8 synthetic DOCX/PDF/PPTX documents with deliberate compliance violations into `test_docs/`. Outputs `manifest.json` with expected findings per document. |
+| `scripts/test_pipeline.py` | End-to-end smoke test: connector → regex PII critic → db → notifier → Telegram. Run with `python scripts/test_pipeline.py [doc_path]`. |
+| `scripts/export_results.py` | Queries PostgreSQL and writes all runs + findings to `data/export_results.json` (or `$EXPORT_OUT_PATH`). Designed to run in a loop (`while true; do python scripts/export_results.py; sleep 60; done`). |
+
+### `test_docs/` — synthetic test corpus
+
+8 pre-generated documents with known compliance violations for pipeline testing:
+
+| File | Violations |
+|---|---|
+| `contrato_juan_garcia_2024.docx` | PII exposed (DNI, email, phone) |
+| `2026-06-01_contrato_limpio.docx` | Clean baseline (no violations) |
+| `kickoff_proyecto_alpha.pptx` | Phone number in slides, TBD/TODO placeholders |
+| `spec_autenticacion_v0.docx` | Placeholder content, non-standard filename |
+| `gdpr_policy_draft.docx` | Missing governance sections |
+| `api_design_FINAL_v2.pdf` | Non-standard naming |
+| `informe_ventas_Q1_2026.pdf` | Missing owner metadata |
+| `Q1_Results_Deck.pptx` | Stale content |
+| `manifest.json` | Expected findings per document (used by test_pipeline.py) |
+
+---
+
 ## Project structure
 
 ```
@@ -619,7 +702,9 @@ SOTA_AAI/
 │   ├── coder.py                 # Python REPL ReAct agent
 │   ├── general.py               # catch-all reasoning + episodic memory
 │   ├── auditor.py               # AI-readiness auditor ReAct agent
-│   └── critic.py                # Reflexion critic (CriticDecision)
+│   ├── critic.py                # Reflexion critic (CriticDecision)
+│   ├── connector.py             # [standalone] multi-format doc parser (PDF/DOCX/XLSX/PPTX)
+│   └── executor.py              # [standalone] ReAct auto-fix loop (Telegram → approve → fix)
 ├── graph/
 │   ├── state.py                 # AgentState TypedDict
 │   └── workflow.py              # LangGraph builder — full SOTA topology
@@ -657,6 +742,16 @@ SOTA_AAI/
 │   └── loader.py                # MCP tool loader (experimental)
 ├── ui/
 │   └── app.py                   # Gradio 6.x streaming UI
+├── chase/                       # [standalone] Telegram notifier + PostgreSQL layer
+│   ├── telegram_bot.py          # polling bot — /start + fix/manual/ignore/info callbacks
+│   ├── notifier.py              # send_finding() → Telegram + DB run creation
+│   ├── db.py                    # psycopg2 CRUD for validation_runs / findings / owner_map
+│   └── findings_cache.json      # local run_id → findings cache for bot info callbacks
+├── scripts/                     # [standalone] utility scripts
+│   ├── generate_synthetic.py    # generate 8 synthetic test docs with known violations
+│   ├── test_pipeline.py         # end-to-end smoke test: connector → critic → db → notifier
+│   └── export_results.py        # export DB runs+findings to data/export_results.json
+├── test_docs/                   # synthetic corpus (8 docs + manifest.json)
 └── data/
     ├── chroma_db/               # persisted vector stores + SQLite checkpoints
     └── uploads/                 # sandboxed file workspace
