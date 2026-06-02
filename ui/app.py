@@ -846,7 +846,7 @@ def build_ui() -> gr.Blocks:
 
                 with gr.Row():
                     analytics_refresh_btn = gr.Button("🔄 Refresh", variant="primary", scale=1, min_width=120)
-                    analytics_status      = gr.Markdown(value="", scale=5)
+                    analytics_status      = gr.Markdown(value="")
 
                 analytics_kpi = gr.HTML(value="")
 
