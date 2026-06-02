@@ -27,6 +27,7 @@ mcp>=1.0.0
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 gradio>=4.44.0
+plotly>=5.0.0                         # dashboard charts (Tab 1 & 2)
 
 # ── Observability ─────────────────────────────────────────────────────────────
 langfuse>=2.0.0                       # optional: set LANGFUSE_* env vars to activate

@@ -79,24 +79,28 @@ def audit_repository(folder: str, verbose: bool = False) -> dict:
         )
 
         document_results.append({
-            "path":             path,
-            "name":             file_record["name"],
-            "doc_type":         doc_type,
-            "extension":        extension,
-            "size_bytes":       file_record["size_bytes"],
-            "modified_at":      modified_at,
-            "extraction_ok":    extraction_ok,
-            "staleness":        staleness,
-            "standards":        standards,
-            "governance":       governance,
-            "trust_score":      trust["trust_score"],
-            "needs_supervision": trust["needs_supervision"],
+            "path":              path,
+            "name":              file_record["name"],
+            "doc_type":          doc_type,
+            "extension":         extension,
+            "size_bytes":        file_record["size_bytes"],
+            "modified_at":       modified_at,
+            "extraction_ok":     extraction_ok,
+            "embedded_metadata": embedded_metadata,
+            "staleness":         staleness,
+            "standards":         standards,
+            "governance":        governance,
+            "trust_score":       trust["trust_score"],
+            "needs_supervision":  trust["needs_supervision"],
         })
 
     # ── 3. Aggregate ──────────────────────────────────────────────────────────
     if verbose:
         print("[3/3] Aggregating …", flush=True)
-    return aggregate_findings(document_results)
+    dashboard = aggregate_findings(document_results)
+    # Attach raw per-document list so UIs can drill in without re-running the pipeline
+    dashboard["documents"] = document_results
+    return dashboard
 
 
 def _human_bytes(n: int) -> str:

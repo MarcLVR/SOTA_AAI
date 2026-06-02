@@ -1,42 +1,342 @@
 """
-Gradio UI — full SOTA version.
+Gradio UI — 3-tab version.
 
-New features over v1:
-  - Agent trace panel: supervisor routing + critic scores
-  - HITL approval panel: appears when graph is interrupted
-  - Guardrail warning display
-  - Mem0 memory sidebar (show/clear episodic memories)
-  - Model + HITL toggle controls
+Tab 1 — Scan        : audit_repository() dashboard (no LLM, quota-safe)
+Tab 2 — Documents   : per-document dataframe + drill-in detail panel
+Tab 3 — Ask agent   : existing supervisor/multi-agent chat interface
 """
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
 import threading
 import uuid
 from typing import Iterator
 
 import gradio as gr
+import plotly.graph_objects as go
 from langchain_core.messages import AIMessage, ToolMessage, HumanMessage
 from loguru import logger
 
 from config import settings
-from graph.workflow import build_graph, run_query
-from graph.workflow import resume_after_hitl
+from domain.run_audit import audit_repository
+from domain.tools.aggregate import human_bytes
+from graph.workflow import build_graph, run_query, resume_after_hitl
 from memory import ingest_documents, get_all_memories
 from guardrails import input_guard
 
 
-# ── Graph singleton ───────────────────────────────────────────────────────────
+# ── Graph singleton (Tab 3 only) ─────────────────────────────────────────────
 
-_mcp_tools = []  # MCP disabled (async-only, incompatible with sync graph invocation)
-
+_mcp_tools: list = []
 _graph = build_graph(mcp_tools=_mcp_tools)
 _graph_lock = threading.Lock()
-
-# Track per-thread HITL state: thread_id → interrupted payload
 _hitl_pending: dict[str, dict] = {}
 
+DEFAULT_FOLDER = "domain/demo_corpus/files"
+EXTRAPOLATION_FACTOR = 30_000
 
-# ── Chat logic ────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tab 1 / 2 — pure-Python helpers (no LLM)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _trust_badge(score: float) -> str:
+    if score < 0.50:
+        return "🔴"
+    if score < 0.70:
+        return "🟡"
+    return "🟢"
+
+
+def _hero_html(result: dict, extrapolate: bool) -> str:
+    if not result:
+        return ""
+    h = result["headline"]
+    pct   = round(h["needs_supervision_pct"])
+    count = h["needs_supervision_count"]
+    total = h["total_documents"]
+
+    note = ""
+    if extrapolate:
+        count = round(count * EXTRAPOLATION_FACTOR)
+        total = round(total * EXTRAPOLATION_FACTOR)
+        note = (
+            f'<div style="font-size:12px;color:#6b7280;margin-top:6px;">'
+            f'extrapolated ×{EXTRAPOLATION_FACTOR:,} — actual corpus data scaled for illustration'
+            f'</div>'
+        )
+
+    if pct >= 50:
+        color, bg = "#dc2626", "#fee2e2"
+    elif pct >= 30:
+        color, bg = "#d97706", "#fef3c7"
+    else:
+        color, bg = "#16a34a", "#dcfce7"
+
+    return (
+        f'<div style="text-align:center;padding:28px 20px;background:{bg};'
+        f'border-radius:14px;margin:8px 0;">'
+        f'<div style="font-size:80px;font-weight:900;color:{color};line-height:1.05;">'
+        f'{pct}%</div>'
+        f'<div style="font-size:19px;color:#374151;margin-top:8px;">'
+        f'<strong>{count:,}</strong> of <strong>{total:,}</strong> documents need supervision'
+        f'</div>'
+        f'{note}'
+        f'</div>'
+    )
+
+
+def _stats_html(result: dict, extrapolate: bool) -> str:
+    if not result:
+        return ""
+    h     = result["headline"]
+    est_h = result.get("estimated_remediation_hours", 0)
+
+    docs_label  = (
+        f"{h['total_documents'] * EXTRAPOLATION_FACTOR:,} ×{EXTRAPOLATION_FACTOR:,}"
+        if extrapolate else f"{h['total_documents']:,}"
+    )
+    hours_label = (
+        f"{round(est_h * EXTRAPOLATION_FACTOR):,} h"
+        if extrapolate else f"{round(est_h)} h"
+    )
+    flagged_pct = round(h.get("flagged_size_pct", 0))
+
+    cards = [
+        ("📄", docs_label,                                "Total documents"),
+        ("💾", h["total_size_human"],                    "Total size"),
+        ("⚠️", f"{h.get('flagged_size_human','—')} ({flagged_pct}%)", "At risk"),
+        ("🕐", hours_label,                               "Est. remediation"),
+    ]
+    inner = "".join(
+        f'<div style="flex:1;min-width:110px;background:#f9fafb;border:1px solid #e5e7eb;'
+        f'padding:14px 10px;border-radius:10px;text-align:center;">'
+        f'<div style="font-size:22px;">{icon}</div>'
+        f'<div style="font-size:17px;font-weight:700;color:#111827;margin:4px 0;">{val}</div>'
+        f'<div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;">'
+        f'{lbl}</div></div>'
+        for icon, val, lbl in cards
+    )
+    return f'<div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">{inner}</div>'
+
+
+def _reasons_fig(result: dict):
+    if not result:
+        return None
+    reasons = result.get("reasons", {})
+    label_map = {
+        "stale":               "Stale",
+        "cold":                "Cold (not accessed)",
+        "non_standard_format": "Non-standard format",
+        "missing_sections":    "Missing sections",
+        "retired_standards":   "Retired standards",
+        "placeholder_content": "Placeholder content",
+        "no_owner":            "No owner",
+        "unclassified":        "Unclassified",
+        "missing_metadata":    "Missing metadata",
+        "extraction_failed":   "Extraction failed",
+    }
+    items = [(label_map.get(k, k), v) for k, v in reasons.items() if v > 0]
+    items.sort(key=lambda x: x[1])  # ascending → largest bar at top
+
+    if not items:
+        return go.Figure().update_layout(title="No flagged documents")
+
+    fig = go.Figure(go.Bar(
+        x=[i[1] for i in items],
+        y=[i[0] for i in items],
+        orientation="h",
+        marker_color="#ef4444",
+        text=[str(i[1]) for i in items],
+        textposition="outside",
+    ))
+    fig.update_layout(
+        title="Top reasons for flagging",
+        xaxis_title="Documents",
+        height=360,
+        margin=dict(l=210, r=60, t=50, b=40),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(size=12),
+    )
+    return fig
+
+
+def _doc_type_fig(result: dict):
+    if not result:
+        return None
+    by_type = result.get("by_doc_type", {})
+    if not by_type:
+        return go.Figure().update_layout(title="No document-type data")
+
+    types   = list(by_type.keys())
+    counts  = [v["count"]   for v in by_type.values()]
+    flagged = [v["flagged"] for v in by_type.values()]
+
+    fig = go.Figure(data=[
+        go.Bar(name="Total",   x=types, y=counts,  marker_color="#3b82f6"),
+        go.Bar(name="Flagged", x=types, y=flagged, marker_color="#ef4444"),
+    ])
+    fig.update_layout(
+        barmode="group",
+        title="By document type",
+        xaxis_title="Type",
+        yaxis_title="Count",
+        height=300,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=50, r=20, t=60, b=50),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(size=12),
+    )
+    return fig
+
+
+def _build_table_rows(docs_sorted: list) -> list[list]:
+    rows = []
+    for doc in docs_sorted:
+        trust = doc.get("trust_score", 1.0)
+        badge = _trust_badge(trust)
+
+        all_findings = (
+            doc.get("staleness", {}).get("findings", [])
+            + doc.get("standards", {}).get("findings", [])
+            + doc.get("governance", {}).get("findings", [])
+        )
+        top_reason = (all_findings[0][:120] if all_findings else "—")
+        modified   = (doc.get("modified_at") or "")[:10] or "—"
+
+        rows.append([
+            doc.get("name", ""),
+            doc.get("doc_type", ""),
+            human_bytes(doc.get("size_bytes", 0)),
+            modified,
+            f"{badge} {trust:.2f}",
+            "Yes" if doc.get("needs_supervision") else "No",
+            top_reason,
+        ])
+    return rows
+
+
+def _doc_detail_md(row_idx: int, docs: list) -> str:
+    if not docs or row_idx is None or row_idx >= len(docs):
+        return "_Select a row to see full findings._"
+
+    doc   = docs[row_idx]
+    trust = doc.get("trust_score", 1.0)
+    badge = _trust_badge(trust)
+    s, st, g = doc.get("staleness", {}), doc.get("standards", {}), doc.get("governance", {})
+
+    lines = [
+        f"## {doc.get('name', 'Unknown')}",
+        f"`{doc.get('path', '')}`  ",
+        "",
+        f"**Type:** {doc.get('doc_type', '—')} &nbsp;|&nbsp; "
+        f"**Size:** {human_bytes(doc.get('size_bytes', 0))} &nbsp;|&nbsp; "
+        f"**Modified:** {(doc.get('modified_at') or '')[:10] or '—'}  ",
+        f"**Trust score:** {badge} **{trust:.3f}** "
+        f"{'— needs supervision' if doc.get('needs_supervision') else '— passes threshold'}  ",
+        "",
+    ]
+
+    for title, obj in [("Staleness", s), ("Standards", st), ("Governance", g)]:
+        findings = obj.get("findings", [])
+        if findings:
+            lines.append(f"### {title} findings")
+            lines.extend(f"- {f}" for f in findings)
+            lines.append("")
+
+    meta = doc.get("embedded_metadata") or {}
+    if meta:
+        lines.append("### Embedded metadata")
+        lines.extend(f"- **{k}:** {v}" for k, v in meta.items() if v)
+        lines.append("")
+
+    lines += [
+        "### Scores",
+        f"- Staleness: `{s.get('staleness_score', '—')}`  "
+        f"(stale={s.get('is_stale', '—')}, cold={s.get('is_cold', '—')}, "
+        f"age={s.get('age_days', '—')} days)",
+        f"- Standards: `{st.get('standards_score', '—')}`  "
+        f"(standard format={st.get('is_standard_format', '—')})",
+        f"- Governance: `{g.get('governance_score', '—')}`  "
+        f"(has owner={g.get('has_owner', '—')}, classified={g.get('classification_valid', '—')})",
+    ]
+    return "\n".join(lines)
+
+
+# ── Audit run & toggle handlers ───────────────────────────────────────────────
+
+def _get_file_path(f) -> str:
+    """Normalize file object across Gradio versions."""
+    if isinstance(f, str):
+        return f
+    if hasattr(f, "name"):
+        return f.name
+    if isinstance(f, dict):
+        return f.get("path") or f.get("name") or f.get("tmp_path") or ""
+    return str(f)
+
+
+def run_audit_ui(folder: str, uploaded_files, extrapolate: bool):
+    """
+    Tab 1 'Run Audit' handler.
+    Returns: (audit_state, docs_state, hero, stats, reasons_fig, doc_type_fig,
+              table_rows, detail_md)
+    """
+    tmp_dir = None
+    try:
+        if uploaded_files:
+            tmp_dir = tempfile.mkdtemp(prefix="sota_audit_")
+            for f in uploaded_files:
+                src = _get_file_path(f)
+                if src and os.path.isfile(src):
+                    shutil.copy(src, tmp_dir)
+            target = tmp_dir
+        else:
+            target = (folder or DEFAULT_FOLDER).strip()
+
+        result      = audit_repository(target)
+        documents   = result.get("documents", [])
+        docs_sorted = sorted(documents, key=lambda d: d.get("trust_score", 1.0))
+
+        return (
+            result,
+            docs_sorted,
+            _hero_html(result, extrapolate),
+            _stats_html(result, extrapolate),
+            _reasons_fig(result),
+            _doc_type_fig(result),
+            _build_table_rows(docs_sorted),
+            "_Select a row to see document details._",
+        )
+    except Exception as exc:
+        logger.exception(f"Audit error: {exc}")
+        err = f"❌ **Error:** {exc}"
+        return (None, [], err, "", None, None, [], "_No data._")
+    finally:
+        if tmp_dir and os.path.isdir(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def update_extrapolation(extrapolate: bool, result: dict | None):
+    if not result:
+        return "", ""
+    return _hero_html(result, extrapolate), _stats_html(result, extrapolate)
+
+
+def select_doc_row(evt: gr.SelectData, docs: list) -> str:
+    if evt is None or evt.index is None:
+        return "_Select a row to see details._"
+    row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else int(evt.index)
+    return _doc_detail_md(row_idx, docs)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tab 3 — chat helpers (unchanged logic from original app.py)
+# ─────────────────────────────────────────────────────────────────────────────
 
 def chat(
     message: str,
@@ -45,26 +345,29 @@ def chat(
     model: str,
     enable_hitl: bool,
 ) -> Iterator[tuple[list, str, gr.update, gr.update, gr.update]]:
-    """
-    Yields: (history, trace_md, hitl_row_visible, hitl_response_text, warnings_text)
-    """
+    """Yields: (history, trace_md, hitl_row_visible, hitl_response_text, warnings_text)"""
     if not message.strip():
         yield history, "", gr.update(visible=False), gr.update(value=""), gr.update(value="")
         return
 
     settings.ollama_model = model
 
-    # Input guard
     guard = input_guard(message)
     warnings_text = ""
     if not guard.passed:
-        history = history + [{"role": "user", "content": message}, {"role": "assistant", "content": f"⚠️ {guard.reason}"}]
+        history = history + [
+            {"role": "user",      "content": message},
+            {"role": "assistant", "content": f"⚠️ {guard.reason}"},
+        ]
         yield history, "", gr.update(visible=False), gr.update(value=""), gr.update(value=f"🚫 {guard.reason}")
         return
     if guard.warnings:
         warnings_text = "⚠️ " + " | ".join(guard.warnings)
 
-    history = history + [{"role": "user", "content": message}, {"role": "assistant", "content": ""}]
+    history = history + [
+        {"role": "user",      "content": message},
+        {"role": "assistant", "content": ""},
+    ]
     trace_lines: list[str] = []
 
     try:
@@ -74,38 +377,36 @@ def chat(
             "callbacks": get_callbacks(),
         }
         initial_state = {
-            "messages": [HumanMessage(content=guard.sanitised_text)],
-            "next_agent": "",
-            "reasoning": "",
+            "messages":        [HumanMessage(content=guard.sanitised_text)],
+            "next_agent":      "",
+            "reasoning":       "",
             "last_specialist": "",
             "supervisor_rounds": 0,
-            "critique": "",
-            "critique_score": 0.0,
-            "should_revise": False,
-            "revision_count": 0,
+            "critique":        "",
+            "critique_score":  0.0,
+            "should_revise":   False,
+            "revision_count":  0,
             "retrieved_context": "",
-            "hitl_required": enable_hitl,
+            "hitl_required":   enable_hitl,
         }
 
         with _graph_lock:
-            stream = _graph.stream(initial_state, config=config, stream_mode="values")
+            stream      = _graph.stream(initial_state, config=config, stream_mode="values")
             accumulated = ""
 
             for event in stream:
-                msgs = event.get("messages", [])
-                reasoning = event.get("reasoning", "")
-                next_agent = event.get("next_agent", "")
-                score = event.get("critique_score")
-                critique = event.get("critique", "")
+                msgs        = event.get("messages", [])
+                reasoning   = event.get("reasoning", "")
+                next_agent  = event.get("next_agent", "")
+                score       = event.get("critique_score")
+                critique    = event.get("critique", "")
                 should_revise = event.get("should_revise", False)
 
-                # Trace: supervisor routing
                 if reasoning and next_agent and next_agent not in ("", "FINISH"):
                     trace_lines.append(
                         f"🔀 **Supervisor** → `{next_agent}`\n   _{reasoning}_"
                     )
 
-                # Trace: critic decision
                 if score is not None and score > 0:
                     icon = "🔁" if should_revise else "✅"
                     trace_lines.append(
@@ -113,7 +414,6 @@ def chat(
                         + (f"\n   _{critique[:80]}_" if critique and should_revise else "")
                     )
 
-                # Stream AI response tokens
                 for msg in msgs:
                     if isinstance(msg, AIMessage) and msg.content:
                         accumulated = msg.content
@@ -130,14 +430,12 @@ def chat(
                     gr.update(value=warnings_text),
                 )
 
-        # Check if graph was interrupted (HITL)
         state = _graph.get_state(config)
         if state.next and "hitl" in str(state.next):
-            interrupt_val = state.tasks[0].interrupts[0].value if state.tasks else {}
+            interrupt_val  = state.tasks[0].interrupts[0].value if state.tasks else {}
             _hitl_pending[thread_id] = {**interrupt_val, "config": config}
             response_preview = interrupt_val.get("response", "")[:500]
             score_str = f"\n\n**Critic score**: {interrupt_val.get('critique_score', 'N/A')}"
-
             history[-1]["content"] = accumulated or "(awaiting approval)"
             yield (
                 history,
@@ -164,15 +462,13 @@ def chat(
 
 
 def handle_hitl(thread_id: str, approved: bool, feedback: str) -> tuple[list, str]:
-    """Called when user approves or rejects in the HITL panel."""
     pending = _hitl_pending.pop(thread_id, None)
     if not pending:
         return [], "No pending HITL request."
-
     config = pending["config"]
     try:
         result = resume_after_hitl(_graph, thread_id, approved=approved, feedback=feedback)
-        trace = "✅ Approved and sent." if approved else f"🔁 Sent back for revision: {feedback}"
+        trace  = "✅ Approved and sent." if approved else f"🔁 Sent back for revision: {feedback}"
         return [{"role": "assistant", "content": result}], trace
     except Exception as e:
         logger.error(f"HITL resume error: {e}")
@@ -182,7 +478,8 @@ def handle_hitl(thread_id: str, approved: bool, feedback: str) -> tuple[list, st
 def upload_docs(files, progress=gr.Progress()) -> str:
     if not files:
         return "No files selected."
-    paths = [f.name for f in files]
+    paths = [_get_file_path(f) for f in files]
+    paths = [p for p in paths if p]
     progress(0, desc="Ingesting…")
     try:
         n = ingest_documents(paths, source_tag="user_upload")
@@ -202,92 +499,208 @@ def new_session() -> str:
     return str(uuid.uuid4())[:8]
 
 
-# ── UI ────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# UI assembly
+# ─────────────────────────────────────────────────────────────────────────────
 
 OLLAMA_MODELS = [
     "llama3.2", "llama3.1", "qwen2.5", "qwen2.5:14b",
     "mistral", "gemma3", "phi4", "deepseek-r1",
 ]
 
-EXAMPLES = [
+CHAT_EXAMPLES = [
     "What is LangGraph and how does the supervisor pattern work?",
     "Write Python to compute and plot a confusion matrix.",
     "Search for recent papers on agentic AI.",
     "Explain SHAP values with a code example using XGBoost.",
     "Remember that I prefer pandas for data manipulation.",
-    "What do you remember about my preferences?",
+    "Audit domain/demo_corpus/files and tell me what to prioritise.",
 ]
+
+TABLE_HEADERS = ["Name", "Type", "Size", "Modified", "Trust", "Supervision?", "Top reason"]
 
 
 def build_ui() -> gr.Blocks:
-    with gr.Blocks(title="Agentic AI") as demo:
+    with gr.Blocks(title="AI-Readiness Dashboard") as demo:
 
         gr.Markdown(
-            "# 🤖 Agentic AI\n"
-            "**LangGraph · Ollama · RAG · Reflexion · HITL · MCP · Mem0**",
+            "# AI-Readiness Dashboard\n"
+            "**Auditor · LangGraph · Reflexion · HITL · RAG · Mem0**"
         )
 
-        with gr.Row():
-            # ── Left: Chat ────────────────────────────────────────────────────
-            with gr.Column(scale=3):
-                chatbot = gr.Chatbot(height=500)
+        # ── Shared state (accessible from all tabs) ───────────────────────────
+        audit_state = gr.State(None)   # full audit result dict
+        docs_state  = gr.State([])     # per-document list sorted by trust_score
 
-                # HITL approval panel (hidden by default)
-                with gr.Group(visible=False) as hitl_row:
-                    gr.Markdown("### ⏸️ Human Review Required")
-                    hitl_response = gr.Textbox(
-                        label="Agent's proposed response",
-                        lines=5,
-                        interactive=False,
-                    )
-                    hitl_feedback = gr.Textbox(
-                        label="Feedback (if rejecting)",
-                        placeholder="What should be improved?",
-                    )
-                    with gr.Row():
-                        approve_btn = gr.Button("✅ Approve", variant="primary")
-                        reject_btn  = gr.Button("🔁 Reject & revise", variant="secondary")
+        with gr.Tabs():
 
-                warnings_box = gr.Markdown(value="", visible=True)
+            # ═══════════════════════════════════════════════════════════════════
+            # TAB 1 — SCAN
+            # ═══════════════════════════════════════════════════════════════════
+            with gr.Tab("🔍 Scan"):
 
                 with gr.Row():
-                    msg_box  = gr.Textbox(placeholder="Ask anything…", label="", lines=2, scale=5)
-                    send_btn = gr.Button("Send ▶", variant="primary", scale=1)
+                    folder_input = gr.Textbox(
+                        value=DEFAULT_FOLDER,
+                        label="Folder path",
+                        placeholder="Absolute or relative path to your document repository",
+                        scale=4,
+                    )
+                    run_btn = gr.Button("▶  Run Audit", variant="primary", scale=1, min_width=140)
 
-                gr.Examples(examples=EXAMPLES, inputs=msg_box, label="Examples")
-
-            # ── Right: Controls + Trace + Memory ─────────────────────────────
-            with gr.Column(scale=1):
-                model_dd = gr.Dropdown(
-                    choices=OLLAMA_MODELS, value=settings.ollama_model,
-                    label="Ollama model", interactive=True,
-                )
-                hitl_toggle = gr.Checkbox(
-                    label="🔒 Enable human-in-the-loop review", value=False
-                )
-
-                thread_state   = gr.State(new_session())
-                thread_display = gr.Textbox(label="Session ID", interactive=False, value=new_session())
-                new_session_btn = gr.Button("🔄 New session")
-
-                gr.Markdown("---\n### 🔍 Agent trace")
-                trace_box = gr.Markdown(value="_(trace will appear here)_")
-
-                gr.Markdown("---\n### 🧠 Episodic memory")
-                recall_btn  = gr.Button("Show memories")
-                memory_box  = gr.Markdown(value="")
-
-                gr.Markdown("---\n### 📄 Add to RAG memory")
-                file_upload  = gr.File(
-                    label=".txt / .md / .pdf",
-                    file_types=[".txt", ".md", ".pdf"],
+                file_upload_scan = gr.File(
+                    label="Or drag & drop your own files (PDF, DOCX, XLSX, PPTX, CSV, TXT, MD)",
                     file_count="multiple",
+                    file_types=[".pdf", ".docx", ".xlsx", ".pptx", ".csv", ".txt", ".md", ".json"],
                 )
-                upload_btn    = gr.Button("📥 Ingest")
-                upload_status = gr.Textbox(label="Status", interactive=False)
+
+                extrapolate_cb = gr.Checkbox(
+                    label=f"Extrapolate to full repository (×{EXTRAPOLATION_FACTOR:,}) — scales "
+                          f"document count & remediation hours for illustration only",
+                    value=False,
+                )
+
+                gr.Markdown("---")
+
+                # Hero + stat cards
+                hero_html  = gr.HTML(value="")
+                stats_html = gr.HTML(value="")
+
+                # Charts
+                with gr.Row():
+                    reasons_plot  = gr.Plot(label="Top reasons for flagging")
+                    doc_type_plot = gr.Plot(label="By document type")
+
+            # ═══════════════════════════════════════════════════════════════════
+            # TAB 2 — DOCUMENTS
+            # ═══════════════════════════════════════════════════════════════════
+            with gr.Tab("📋 Documents"):
+
+                gr.Markdown(
+                    "Sorted by trust score (worst first). "
+                    "**Click a row** to see the full findings for that document."
+                )
+
+                doc_table = gr.Dataframe(
+                    headers=TABLE_HEADERS,
+                    datatype=["str"] * len(TABLE_HEADERS),
+                    interactive=False,
+                    wrap=True,
+                    row_count=(1, "dynamic"),
+                )
+
+                gr.Markdown("---\n### Document detail")
+                detail_md = gr.Markdown("_Run an audit in the Scan tab, then select a row._")
+
+            # ═══════════════════════════════════════════════════════════════════
+            # TAB 3 — ASK THE AGENT
+            # ═══════════════════════════════════════════════════════════════════
+            with gr.Tab("🤖 Ask the agent"):
+
+                with gr.Row():
+                    # ── Left: Chat ────────────────────────────────────────────
+                    with gr.Column(scale=3):
+                        chatbot = gr.Chatbot(height=500)
+
+                        # HITL approval panel
+                        with gr.Group(visible=False) as hitl_row:
+                            gr.Markdown("### ⏸️ Human Review Required")
+                            hitl_response = gr.Textbox(
+                                label="Agent's proposed response",
+                                lines=5,
+                                interactive=False,
+                            )
+                            hitl_feedback = gr.Textbox(
+                                label="Feedback (if rejecting)",
+                                placeholder="What should be improved?",
+                            )
+                            with gr.Row():
+                                approve_btn = gr.Button("✅ Approve",         variant="primary")
+                                reject_btn  = gr.Button("🔁 Reject & revise", variant="secondary")
+
+                        warnings_box = gr.Markdown(value="", visible=True)
+
+                        with gr.Row():
+                            msg_box  = gr.Textbox(
+                                placeholder="Ask anything — audits, code, research…",
+                                label="", lines=2, scale=5,
+                            )
+                            send_btn = gr.Button("Send ▶", variant="primary", scale=1)
+
+                        gr.Examples(examples=CHAT_EXAMPLES, inputs=msg_box, label="Examples")
+
+                    # ── Right: Controls + Trace + Memory ─────────────────────
+                    with gr.Column(scale=1):
+                        model_dd = gr.Dropdown(
+                            choices=OLLAMA_MODELS,
+                            value=settings.ollama_model,
+                            label="Ollama model",
+                            interactive=True,
+                        )
+                        hitl_toggle = gr.Checkbox(
+                            label="🔒 Enable human-in-the-loop review",
+                            value=False,
+                        )
+
+                        thread_state   = gr.State(new_session())
+                        thread_display = gr.Textbox(
+                            label="Session ID", interactive=False, value=new_session()
+                        )
+                        new_session_btn = gr.Button("🔄 New session")
+
+                        langfuse_note = (
+                            "🔍 [Langfuse trace active](https://cloud.langfuse.com) — "
+                            "every decision is logged and auditable."
+                            if settings.langfuse_public_key
+                            else "_Langfuse tracing not configured (`LANGFUSE_PUBLIC_KEY` unset)._"
+                        )
+                        gr.Markdown(f"---\n{langfuse_note}")
+
+                        gr.Markdown("---\n### 🔍 Agent trace")
+                        trace_box = gr.Markdown(value="_(trace will appear here)_")
+
+                        gr.Markdown("---\n### 🧠 Episodic memory")
+                        recall_btn = gr.Button("Show memories")
+                        memory_box = gr.Markdown(value="")
+
+                        gr.Markdown("---\n### 📄 Add to RAG memory")
+                        file_upload_rag = gr.File(
+                            label=".txt / .md / .pdf",
+                            file_types=[".txt", ".md", ".pdf"],
+                            file_count="multiple",
+                        )
+                        upload_btn    = gr.Button("📥 Ingest")
+                        upload_status = gr.Textbox(label="Status", interactive=False)
 
         # ── Wiring ────────────────────────────────────────────────────────────
 
+        # Tab 1 — Run Audit
+        run_btn.click(
+            run_audit_ui,
+            inputs=[folder_input, file_upload_scan, extrapolate_cb],
+            outputs=[
+                audit_state, docs_state,
+                hero_html, stats_html,
+                reasons_plot, doc_type_plot,
+                doc_table, detail_md,
+            ],
+        )
+
+        # Tab 1 — extrapolation toggle re-renders hero + stats without re-running audit
+        extrapolate_cb.change(
+            update_extrapolation,
+            inputs=[extrapolate_cb, audit_state],
+            outputs=[hero_html, stats_html],
+        )
+
+        # Tab 2 — row selection → detail panel
+        doc_table.select(
+            select_doc_row,
+            inputs=[docs_state],
+            outputs=[detail_md],
+        )
+
+        # Tab 3 — chat
         def submit(msg, hist, tid, model, hitl):
             yield from chat(msg, hist, tid, model, hitl)
 
@@ -320,11 +733,12 @@ def build_ui() -> gr.Blocks:
             return sid, sid, [], "_(new session)_", ""
 
         new_session_btn.click(
-            reset, outputs=[thread_state, thread_display, chatbot, trace_box, memory_box]
+            reset,
+            outputs=[thread_state, thread_display, chatbot, trace_box, memory_box],
         )
 
-        recall_btn.click(show_memories, inputs=thread_state, outputs=memory_box)
-        upload_btn.click(upload_docs, inputs=file_upload, outputs=upload_status)
+        recall_btn.click(show_memories,  inputs=thread_state,   outputs=memory_box)
+        upload_btn.click(upload_docs,    inputs=file_upload_rag, outputs=upload_status)
 
     return demo
 
