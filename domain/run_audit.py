@@ -155,14 +155,25 @@ def _print_report(report: dict, top: int = 10) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI-Readiness Auditor")
     parser.add_argument("folder", help="Path to the document repository to audit")
-    parser.add_argument("--json", action="store_true", help="Output raw JSON instead of report")
+    parser.add_argument(
+        "--json", nargs="?", const="-", default=None, metavar="FILE",
+        help="Output JSON to FILE, or stdout when FILE is omitted",
+    )
     parser.add_argument("--top", type=int, default=10, help="Number of top offenders to show")
     args = parser.parse_args()
 
-    report = audit_repository(args.folder, verbose=not args.json)
+    json_mode = args.json is not None
+    report = audit_repository(args.folder, verbose=not json_mode)
 
-    if args.json:
-        print(json.dumps(report, indent=2))
+    if json_mode:
+        output = json.dumps(report, indent=2)
+        if args.json == "-":
+            print(output)
+        else:
+            from pathlib import Path as _Path
+            _Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+            _Path(args.json).write_text(output, encoding="utf-8")
+            print(f"JSON written → {args.json}")
     else:
         _print_report(report, top=args.top)
 
