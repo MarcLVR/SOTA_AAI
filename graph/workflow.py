@@ -30,7 +30,7 @@ New in this version:
 from __future__ import annotations
 
 from typing import Any
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import interrupt
@@ -85,12 +85,13 @@ def _make_agent_node(agent, name: str):
     def node(state: AgentState) -> dict:
         messages = list(state["messages"])
 
-        # Inject critique as a system hint if this is a revision pass
+        # Inject critique as a human follow-up on revision passes.
+        # Must be HumanMessage — Claude rejects multiple non-consecutive SystemMessages.
         critique = state.get("critique", "")
         if critique and state.get("revision_count", 0) > 0:
             messages.append(
-                SystemMessage(
-                    content=f"[Revision requested] Previous response scored "
+                HumanMessage(
+                    content=f"[Revision requested] Your previous response scored "
                             f"{state.get('critique_score', 0):.0%}. "
                             f"Critique: {critique}\nPlease improve your response."
                 )
