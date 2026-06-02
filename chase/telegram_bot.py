@@ -139,6 +139,8 @@ def start_bot_background() -> None:
 
     Uses the low-level async API instead of run_polling() because run_polling()
     calls signal.set_wakeup_fd() which only works in the main thread.
+    On repeated 409 Conflict (previous instance still alive), gives up after
+    5 retries and logs a clear warning instead of retrying forever.
     """
     if not BOT_TOKEN:
         log.warning("TELEGRAM_BOT_TOKEN not set — Telegram bot disabled")
@@ -146,16 +148,29 @@ def start_bot_background() -> None:
 
     def _run():
         import asyncio
+        from telegram.error import Conflict as TgConflict
 
         async def _async_main():
+            # Steal the connection from any lingering poller by making a
+            # short getUpdates call — Telegram kicks the old long-poll out.
+            from telegram import Bot as _Bot
+            try:
+                async with _Bot(token=BOT_TOKEN) as _bot:
+                    await _bot.get_updates(offset=-1, timeout=1)
+                    log.info("Telegram: previous poller evicted, starting fresh")
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+
             app = Application.builder().token(BOT_TOKEN).build()
             app.add_handler(CommandHandler("start", start))
             app.add_handler(CallbackQueryHandler(handle_callback))
+
             async with app:
                 await app.start()
                 await app.updater.start_polling(drop_pending_updates=True)
                 log.info("DAVE bot arrancando — @DAVEValidatorBot")
-                await asyncio.Event().wait()  # run until daemon thread is killed
+                await asyncio.Event().wait()
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
