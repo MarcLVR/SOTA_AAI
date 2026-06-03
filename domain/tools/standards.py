@@ -11,16 +11,34 @@ from domain.knowledge import (
 
 STANDARD_DOC_EXTENSIONS: set[str] = {".pdf", ".docx", ".xlsx", ".pptx"}
 
+# Formats that must have an extractable text layer to be machine-auditable.
+# An empty-text result from these formats indicates a scanned image, encryption,
+# or a rendering failure — all of which require manual review.
+_TEXT_CONTENT_EXPECTED: set[str] = {".pdf", ".docx", ".doc", ".pptx", ".ppt"}
+
 # Penalty weights
-_RETIRED_STD_PENALTY = 0.10   # per retired-standard hit
-_PLACEHOLDER_PENALTY = 0.05   # per placeholder hit
-_FORMAT_PENALTY      = 0.15   # non-standard format
+_RETIRED_STD_PENALTY  = 0.10   # per retired-standard hit
+_PLACEHOLDER_PENALTY  = 0.05   # per placeholder hit
+_FORMAT_PENALTY       = 0.15   # non-standard format
+_EMPTY_TEXT_PENALTY   = 0.75   # no text in a text-expected format → forces score to 0
 
 
 def check_standards(doc_type: str, extension: str, text: str) -> dict:
     """Check structural compliance, format standardness, and retired references."""
     text_lower = text.lower()
     findings: list[str] = []
+
+    # ── Empty-text guard ──────────────────────────────────────────────────────
+    # Standard text-format documents with no extractable text cannot be
+    # content-audited. Flag them for manual review (scanned images, encrypted
+    # files, or corrupt documents all present this signature).
+    empty_text = extension.lower() in _TEXT_CONTENT_EXPECTED and not text.strip()
+    if empty_text:
+        findings.append(
+            "No text extracted — document may be a scanned image, "
+            "password-protected, or have a text-rendering issue. "
+            "Content cannot be automatically audited; manual review required."
+        )
 
     # ── Format ────────────────────────────────────────────────────────────────
     is_standard_format = extension.lower() in STANDARD_DOC_EXTENSIONS
@@ -73,6 +91,8 @@ def check_standards(doc_type: str, extension: str, text: str) -> dict:
         score -= _FORMAT_PENALTY
     score -= len(retired_standard_hits) * _RETIRED_STD_PENALTY
     score -= len(placeholder_hits) * _PLACEHOLDER_PENALTY
+    if empty_text:
+        score -= _EMPTY_TEXT_PENALTY   # guaranteed to reach 0 even from 0.70 base
 
     standards_score = round(max(0.0, min(1.0, score)), 4)
 
