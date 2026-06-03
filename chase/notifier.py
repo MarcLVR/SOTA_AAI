@@ -1,3 +1,4 @@
+import html
 import json
 import os
 import threading
@@ -40,12 +41,17 @@ def send_finding(owner: str, document: str, findings: list[dict], run_id: int | 
         print(f"[notifier] Unknown owner or missing chat_id: {owner}")
         return False
 
-    lines = [f"📄 *Documento · revisión*\n`{document}`\n"]
+    # HTML mode + html.escape on every dynamic field: the finding text comes
+    # from the document (rule codes, suggestions) and may contain Markdown
+    # metacharacters (_ * [ ...) that break parse_mode="Markdown" with a 400
+    # "can't parse entities". HTML mode only needs < > & escaped.
+    esc = html.escape
+    lines = [f"📄 <b>Documento · revisión</b>\n<code>{esc(str(document))}</code>\n"]
     for f in findings:
         icon = SEVERITY_ICON.get(f.get("severity", "medium"), "🟡")
-        lines.append(f"{icon} *{f['title']}*")
-        lines.append(f"📍 {f['location']}")
-        lines.append(f"💡 _{f['suggestion']}_\n")
+        lines.append(f"{icon} <b>{esc(str(f.get('title', 'Issue')))}</b>")
+        lines.append(f"📍 {esc(str(f.get('location', '')))}")
+        lines.append(f"💡 <i>{esc(str(f.get('suggestion', '')))}</i>\n")
 
     text = "\n".join(lines)
 
@@ -69,7 +75,7 @@ def send_finding(owner: str, document: str, findings: list[dict], run_id: int | 
         json={
             "chat_id":      chat_id,
             "text":         text,
-            "parse_mode":   "Markdown",
+            "parse_mode":   "HTML",
             "reply_markup": keyboard,
         },
         timeout=10,
@@ -150,9 +156,11 @@ def send_text(owner: str, text: str) -> bool:
     chat_id = OWNER_MAP.get(owner)
     if not chat_id:
         return False
+    # Plain text: status updates carry arbitrary content (doc names, errors)
+    # that would trip Markdown parsing. No markup needed here.
     r = requests.post(
         f"{TG_API}/sendMessage",
-        json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+        json={"chat_id": chat_id, "text": text},
         timeout=10,
     )
     return r.ok
