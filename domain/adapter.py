@@ -35,6 +35,7 @@ _TITLES: dict[str, str] = {
     "missing_section":      "Missing required section",
     "retired_standard":     "References retired standard",
     "placeholder":          "Contains placeholder content",
+    "brand_misuse":         "Incorrect brand name usage",
     "missing_metadata":     "Missing governance metadata",
     "unclassified":         "Unclassified document",
     "no_owner":             "No document owner",
@@ -56,6 +57,8 @@ _SUGGESTIONS: dict[str, str] = {
         "Replace the retired standard reference with the current version.",
     "placeholder":
         "Complete or remove placeholder content (TBD / TODO / PENDING) before production use.",
+    "brand_misuse":
+        "Write the company name exactly as 'OmniAccess' (capital O and A); never pluralise it.",
     "missing_metadata":
         "Add the missing metadata field to the document properties or header.",
     "unclassified":
@@ -93,6 +96,8 @@ def _infer_rule_code(finding_text: str, signal: str) -> str:
             return "retired_standard"
         if "placeholder" in t or "obsolete marker" in t:
             return "placeholder"
+        if "brand name" in t:
+            return "brand_misuse"
         return "non_standard_format"  # safest fallback for standards
 
     if signal == "governance":
@@ -148,6 +153,13 @@ def _extract_location(finding_text: str, signal: str, rule_code: str) -> str:
             return f"{prefix} · placeholder: {marker}"
         except IndexError:
             return f"{prefix} · placeholder content"
+    if rule_code == "brand_misuse":
+        # "Incorrect brand name usage 'OMNIACCESS': ..."
+        try:
+            variant = finding_text.split("'")[1]
+            return f"{prefix} · brand name: {variant}"
+        except IndexError:
+            return f"{prefix} · brand name"
     if rule_code == "missing_metadata":
         # "Missing governance field: 'owner'."
         try:

@@ -65,6 +65,15 @@ OBSOLETE_CONTENT_MARKERS: list[str] = [
 ]
 
 
+# ── Brand name usage ──────────────────────────────────────────────────────────
+# Canonical spelling of the company/brand name (OmniAccess style guide). Any token
+# matching it case-insensitively but not exactly — wrong casing ("OMNIACCESS",
+# "Omniaccess", "omniaccess") or a pluralised form ("OmniAccesses") — is a branding
+# violation. The possessive ("OmniAccess's") is allowed. Detection lives in
+# tools/standards.py; this is the single tunable fact.
+BRAND_CANONICAL_NAME: str = "OmniAccess"
+
+
 # ── Required sections per doc type ────────────────────────────────────────────
 REQUIRED_SECTIONS: dict[str, list[str]] = {
     "policy":          ["Purpose", "Scope", "Owner", "Effective Date", "Review Date"],

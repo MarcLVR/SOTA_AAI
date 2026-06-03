@@ -3,7 +3,10 @@ Standards / template compliance — the "doesn't follow the quality standard" si
 """
 from __future__ import annotations
 
+import re
+
 from domain.knowledge import (
+    BRAND_CANONICAL_NAME,
     OBSOLETE_CONTENT_MARKERS,
     REQUIRED_SECTIONS,
     RETIRED_STANDARDS,
@@ -21,6 +24,34 @@ _RETIRED_STD_PENALTY  = 0.10   # per retired-standard hit
 _PLACEHOLDER_PENALTY  = 0.05   # per placeholder hit
 _FORMAT_PENALTY       = 0.15   # non-standard format
 _EMPTY_TEXT_PENALTY   = 0.75   # no text in a text-expected format → forces score to 0
+_BRAND_PENALTY        = 0.05   # per distinct brand-name misuse
+
+# Matches the brand name case-insensitively, with an optional plural "es".
+# The possessive ("OmniAccess's") is deliberately not captured → not flagged.
+_BRAND_NAME_RE = re.compile(rf"\b{BRAND_CANONICAL_NAME}(es)?\b", re.IGNORECASE)
+
+
+def _check_brand_name(text: str) -> list[str]:
+    """Flag occurrences of the brand name whose exact spelling is not canonical."""
+    findings: list[str] = []
+    seen: set[str] = set()
+    plural = (BRAND_CANONICAL_NAME + "es").lower()
+    for m in _BRAND_NAME_RE.finditer(text):
+        token = m.group(0)
+        if token == BRAND_CANONICAL_NAME or token in seen:
+            continue
+        seen.add(token)
+        if token.lower() == plural:
+            findings.append(
+                f"Incorrect brand name usage '{token}': the brand name "
+                f"'{BRAND_CANONICAL_NAME}' must never be pluralised."
+            )
+        else:
+            findings.append(
+                f"Incorrect brand name usage '{token}': write the brand exactly as "
+                f"'{BRAND_CANONICAL_NAME}' (capital O and A, lower-case rest)."
+            )
+    return findings
 
 
 def check_standards(doc_type: str, extension: str, text: str) -> dict:
@@ -79,6 +110,10 @@ def check_standards(doc_type: str, extension: str, text: str) -> dict:
             placeholder_hits.append(marker)
             findings.append(f"Contains placeholder/obsolete marker: '{marker}'.")
 
+    # ── Brand name usage ──────────────────────────────────────────────────────
+    brand_violations = _check_brand_name(text)
+    findings.extend(brand_violations)
+
     # ── Score ─────────────────────────────────────────────────────────────────
     # Base: fraction of required sections present
     if required_sections:
@@ -91,6 +126,7 @@ def check_standards(doc_type: str, extension: str, text: str) -> dict:
         score -= _FORMAT_PENALTY
     score -= len(retired_standard_hits) * _RETIRED_STD_PENALTY
     score -= len(placeholder_hits) * _PLACEHOLDER_PENALTY
+    score -= len(brand_violations) * _BRAND_PENALTY
     if empty_text:
         score -= _EMPTY_TEXT_PENALTY   # guaranteed to reach 0 even from 0.70 base
 
@@ -104,5 +140,6 @@ def check_standards(doc_type: str, extension: str, text: str) -> dict:
         "missing_sections": missing_sections,
         "retired_standard_hits": retired_standard_hits,
         "placeholder_hits": placeholder_hits,
+        "brand_violations": brand_violations,
         "findings": findings,
     }
