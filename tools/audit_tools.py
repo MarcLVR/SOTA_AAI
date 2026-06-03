@@ -26,6 +26,8 @@ from domain.tools.staleness import score_staleness as _staleness
 from domain.tools.standards import check_standards as _standards
 from domain.tools.governance import check_governance as _governance
 from domain.tools.aggregate import aggregate_findings as _aggregate, compute_trust_score as _trust
+from domain.tools.metadata_consistency import check_metadata_consistency as _consistency
+from domain.knowledge import doc_type_from_filename
 
 
 @tool
@@ -110,11 +112,12 @@ def check_standards(doc_type: str, extension: str, text: str) -> str:
     Args:
         doc_type: Document type (e.g. 'policy', 'data_dictionary').
         extension: File extension including dot (e.g. '.docx', '.pdf').
-        text: Extracted body text of the document.
+        text: First 2000 characters of extracted body text is sufficient.
     """
     logger.info(f"[check_standards] doc_type='{doc_type}' extension='{extension}'")
     try:
-        result = _standards(doc_type=doc_type, extension=extension, text=text)
+        # Cap text to prevent large context window costs when called individually
+        result = _standards(doc_type=doc_type, extension=extension, text=text[:8000])
         return json.dumps(result)
     except Exception as e:
         logger.error(f"[check_standards] {e}")
@@ -137,7 +140,7 @@ def check_governance(
         doc_type: Document type (e.g. 'policy', 'data_contract').
         embedded_metadata_json: JSON object of embedded file metadata
             (from extract_document's embedded_metadata field).
-        text: Extracted body text (used to find inline governance headers).
+        text: First 2000 characters of extracted body text is sufficient.
     """
     logger.info(f"[check_governance] doc_type='{doc_type}'")
     try:
@@ -145,7 +148,7 @@ def check_governance(
         result = _governance(
             doc_type=doc_type,
             embedded_metadata=embedded_metadata,
-            text=text,
+            text=text[:8000],   # cap to prevent large context costs
         )
         return json.dumps(result)
     except Exception as e:
@@ -239,8 +242,73 @@ def run_full_audit(folder_path: str) -> str:
         return json.dumps({"error": str(e)})
 
 
+@tool
+def inspect_document(path: str) -> str:
+    """Run all audit checks on a single document and return structured findings.
+
+    ALWAYS use this (not the individual tools) when inspecting one specific file.
+    It runs extract → staleness → standards → governance → metadata_consistency
+    internally and returns only the scored findings — no raw document text is
+    included in the response, keeping this call cheap regardless of file size.
+
+    Returns JSON with: name, doc_type, extension, size_bytes, modified_at,
+    extraction_ok, embedded_metadata, trust_score, needs_supervision,
+    staleness, standards, governance, consistency.
+
+    Args:
+        path: Absolute or relative path to the document file.
+    """
+    logger.info(f"[inspect_document] path='{path}'")
+    import os
+    from pathlib import Path as _Path
+    try:
+        p = _Path(path)
+        ext = p.suffix.lower()
+        doc_type = doc_type_from_filename(p.name)
+
+        stat = os.stat(path)
+        from datetime import datetime, timezone
+        modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+        accessed_at = datetime.fromtimestamp(stat.st_atime, tz=timezone.utc).isoformat()
+
+        extracted        = _extract(path)
+        text             = extracted.get("text", "")
+        embedded_meta    = extracted.get("embedded_metadata", {})
+        extraction_ok    = extracted.get("extraction_ok", True)
+
+        staleness    = _staleness(doc_type, modified_at, accessed_at, content_text=text)
+        standards    = _standards(doc_type, ext, text)
+        governance   = _governance(doc_type, embedded_meta, text)
+        consistency  = _consistency(embedded_meta, text, modified_at)
+        trust        = _trust(staleness["staleness_score"],
+                              standards["standards_score"],
+                              governance["governance_score"])
+
+        # Return structured findings — deliberately omit raw text to keep
+        # the LLM context small regardless of document length.
+        return json.dumps({
+            "name":              p.name,
+            "doc_type":          doc_type,
+            "extension":         ext,
+            "size_bytes":        stat.st_size,
+            "modified_at":       modified_at,
+            "extraction_ok":     extraction_ok,
+            "embedded_metadata": embedded_meta,
+            "trust_score":       trust["trust_score"],
+            "needs_supervision": trust["needs_supervision"],
+            "staleness":         staleness,
+            "standards":         standards,
+            "governance":        governance,
+            "consistency":       consistency,
+        })
+    except Exception as e:
+        logger.error(f"[inspect_document] {e}")
+        return json.dumps({"error": str(e), "path": path})
+
+
 AUDITOR_TOOLS = [
     run_full_audit,
+    inspect_document,        # single-doc: zero raw text in LLM context
     crawl_repository,
     extract_document,
     score_staleness,

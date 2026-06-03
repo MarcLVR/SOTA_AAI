@@ -18,6 +18,7 @@ from domain.tools.staleness import score_staleness
 from domain.tools.standards import check_standards
 from domain.tools.governance import check_governance
 from domain.tools.aggregate import aggregate_findings, compute_trust_score
+from domain.tools.metadata_consistency import check_metadata_consistency
 
 
 def audit_repository(folder: str, verbose: bool = False) -> dict:
@@ -66,10 +67,11 @@ def audit_repository(folder: str, verbose: bool = False) -> dict:
         embedded_metadata = extracted.get("embedded_metadata", {})
         extraction_ok = extracted.get("extraction_ok", True)
 
-        # Three signals
-        staleness  = score_staleness(doc_type, modified_at, accessed_at or None, content_text=text)
-        standards  = check_standards(doc_type, extension, text)
-        governance = check_governance(doc_type, embedded_metadata, text)
+        # Three scoring signals + deterministic consistency check (zero LLM cost)
+        staleness   = score_staleness(doc_type, modified_at, accessed_at or None, content_text=text)
+        standards   = check_standards(doc_type, extension, text)
+        governance  = check_governance(doc_type, embedded_metadata, text)
+        consistency = check_metadata_consistency(embedded_metadata, text, modified_at)
 
         # Trust score
         trust = compute_trust_score(
@@ -90,6 +92,7 @@ def audit_repository(folder: str, verbose: bool = False) -> dict:
             "staleness":         staleness,
             "standards":         standards,
             "governance":        governance,
+            "consistency":       consistency,
             "trust_score":       trust["trust_score"],
             "needs_supervision":  trust["needs_supervision"],
         })

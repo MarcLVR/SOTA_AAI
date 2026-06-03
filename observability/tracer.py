@@ -35,14 +35,45 @@ class ConsoleTracerCallback(BaseCallbackHandler):
 
     def on_llm_start(self, serialized: dict, prompts: list[str], **kwargs: Any) -> None:
         model = serialized.get("kwargs", {}).get("model", "?")
-        logger.debug(f"[LLM] ▶ {model} | {len(prompts)} prompt(s)")
+        total_chars = sum(len(p) for p in prompts)
+        logger.info(f"[LLM] ▶ {model} | ~{total_chars // 4:,} tokens estimated ({total_chars:,} chars)")
+        self._t0 = time.perf_counter()
+
+    def on_chat_model_start(
+        self, serialized: dict, messages: list, **kwargs: Any
+    ) -> None:
+        """Called for chat models (ChatAnthropic, ChatGroq, etc.)."""
+        model = (
+            serialized.get("kwargs", {}).get("model")
+            or serialized.get("kwargs", {}).get("model_name")
+            or serialized.get("name", "?")
+        )
+        total_chars = sum(
+            len(m.content) if hasattr(m, "content") else len(str(m))
+            for batch in messages
+            for m in batch
+        )
+        logger.info(
+            f"[LLM] ▶ {model} | ~{total_chars // 4:,} input tokens estimated "
+            f"({total_chars:,} chars across {sum(len(b) for b in messages)} messages)"
+        )
         self._t0 = time.perf_counter()
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
         elapsed = time.perf_counter() - getattr(self, "_t0", time.perf_counter())
-        usage = response.llm_output or {}
-        total_tokens = usage.get("token_usage", {}).get("total_tokens", "?")
-        logger.debug(f"[LLM] ✓ {elapsed:.2f}s | tokens={total_tokens}")
+        out = response.llm_output or {}
+
+        # Anthropic: {"usage": {"input_tokens": N, "output_tokens": N}}
+        # Groq/OpenAI: {"token_usage": {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}}
+        usage = out.get("usage") or out.get("token_usage") or {}
+        input_tok  = usage.get("input_tokens")  or usage.get("prompt_tokens",     0)
+        output_tok = usage.get("output_tokens") or usage.get("completion_tokens", 0)
+        total_tok  = usage.get("total_tokens")  or ((input_tok or 0) + (output_tok or 0)) or "?"
+
+        logger.info(
+            f"[LLM] ✓ {elapsed:.2f}s | tokens={total_tok} "
+            f"(in={input_tok or '?'} out={output_tok or '?'})"
+        )
 
     def on_tool_start(self, serialized: dict, input_str: str, **kwargs: Any) -> None:
         name = serialized.get("name", "?")

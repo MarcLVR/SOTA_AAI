@@ -22,8 +22,11 @@ AUDITOR_SYSTEM = SystemMessage(content=(
     "  • By document type: counts and flagged per type.\n"
     "  • Top offenders: list the worst trust scores with their top finding.\n\n"
     "## Single-document inspection\n"
-    "When asked about one specific file, use the individual tools in order:\n"
-    "  1. extract_document → 2. score_staleness → 3. check_standards → 4. check_governance\n\n"
+    "When asked about one specific file, call inspect_document(path) ONCE.\n"
+    "Do NOT use extract_document / score_staleness / check_standards / check_governance\n"
+    "separately for single files — passing raw document text as tool arguments is\n"
+    "expensive and unnecessary. inspect_document runs all checks internally and\n"
+    "returns only structured findings (no raw text, no wasted tokens).\n\n"
     "## Output style\n"
     "Be specific and cite filenames. Do not invent findings beyond what the tools return.\n\n"
     + INSPECTOR_SYSTEM

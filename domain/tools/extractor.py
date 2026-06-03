@@ -92,8 +92,30 @@ def _extract_pdf(path: str) -> ExtractedDoc:
     for page in reader.pages:
         pages.append(page.extract_text() or "")
     text = "\n".join(pages)
+
+    # Capture all embedded metadata; PDF keys arrive with a leading "/" which
+    # we strip.  We also normalise the five most important keys so downstream
+    # checks can rely on consistent names regardless of pypdf version.
     raw_meta = reader.metadata or {}
-    meta = {k.lstrip("/"): str(v) for k, v in raw_meta.items() if v}
+    meta: dict = {}
+    for k, v in raw_meta.items():
+        if v is None:
+            continue
+        clean_key = str(k).lstrip("/")
+        meta[clean_key] = str(v)
+
+    # Normalise key aliases so metadata_consistency.py can find them reliably
+    for src, dst in (
+        ("Title",        "Title"),
+        ("Author",       "Author"),
+        ("Creator",      "Creator"),
+        ("Producer",     "Producer"),
+        ("CreationDate", "CreationDate"),
+        ("ModDate",      "ModDate"),
+    ):
+        if src in meta and dst not in meta:
+            meta[dst] = meta[src]
+
     return ExtractedDoc(
         text=text,
         embedded_metadata=meta,
