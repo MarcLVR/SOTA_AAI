@@ -58,8 +58,10 @@ class CriticDecision(BaseModel):
     @field_validator("should_revise", mode="before")
     @classmethod
     def enforce_threshold(cls, v, info):
+        # Threshold is the sole arbiter — ignore the LLM's boolean to prevent
+        # unnecessary revisions when score >= threshold.
         score = info.data.get("score", 1.0)
-        return bool(v) or (score < REVISION_THRESHOLD)
+        return score < REVISION_THRESHOLD
 
 
 def critic_node(state: AgentState) -> dict:

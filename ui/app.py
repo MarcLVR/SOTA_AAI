@@ -358,15 +358,12 @@ def chat(
     message: str,
     history: list,
     thread_id: str,
-    model: str,
     enable_hitl: bool,
 ) -> Iterator[tuple[list, str, gr.update, gr.update, gr.update]]:
     """Yields: (history, trace_md, hitl_row_visible, hitl_response_text, warnings_text)"""
     if not message.strip():
         yield history, "", gr.update(visible=False), gr.update(value=""), gr.update(value="")
         return
-
-    settings.ollama_model = model
 
     guard = input_guard(message)
     warnings_text = ""
@@ -670,11 +667,6 @@ def run_analytics_ui():
         return (err, None, None, None, None, None, f"🔴 {exc}")
 
 
-OLLAMA_MODELS = [
-    "llama3.2", "llama3.1", "qwen2.5", "qwen2.5:14b",
-    "mistral", "gemma3", "phi4", "deepseek-r1",
-]
-
 CHAT_EXAMPLES = [
     "What is LangGraph and how does the supervisor pattern work?",
     "Write Python to compute and plot a confusion matrix.",
@@ -798,12 +790,6 @@ def build_ui() -> gr.Blocks:
 
                     # ── Right: Controls + Trace + Memory ─────────────────────
                     with gr.Column(scale=1):
-                        model_dd = gr.Dropdown(
-                            choices=OLLAMA_MODELS,
-                            value=settings.ollama_model,
-                            label="Ollama model",
-                            interactive=True,
-                        )
                         hitl_toggle = gr.Checkbox(
                             label="🔒 Enable human-in-the-loop review",
                             value=False,
@@ -889,18 +875,18 @@ def build_ui() -> gr.Blocks:
         )
 
         # Tab 3 — chat
-        def submit(msg, hist, tid, model, hitl):
-            yield from chat(msg, hist, tid, model, hitl)
+        def submit(msg, hist, tid, hitl):
+            yield from chat(msg, hist, tid, hitl)
 
         send_btn.click(
             submit,
-            inputs=[msg_box, chatbot, thread_state, model_dd, hitl_toggle],
+            inputs=[msg_box, chatbot, thread_state, hitl_toggle],
             outputs=[chatbot, trace_box, hitl_row, hitl_response, warnings_box],
         ).then(lambda: "", outputs=msg_box)
 
         msg_box.submit(
             submit,
-            inputs=[msg_box, chatbot, thread_state, model_dd, hitl_toggle],
+            inputs=[msg_box, chatbot, thread_state, hitl_toggle],
             outputs=[chatbot, trace_box, hitl_row, hitl_response, warnings_box],
         ).then(lambda: "", outputs=msg_box)
 
