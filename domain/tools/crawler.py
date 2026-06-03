@@ -30,12 +30,12 @@ SUPPORTED_EXTENSIONS: set[str] = {
     ".csv", ".json", ".txt", ".md",
 }
 
-# ── Junk-file filters (SharePoint / OneDrive artifacts) ──────────────────────
+# ── Junk-file filters ────────────────────────────────────────────────────────
 
 _SKIP_DIRS: set[str] = {
     ".git", ".venv", "__pycache__", "node_modules", ".mypy_cache",
     ".pytest_cache", ".tox", "dist", "build", ".eggs",
-    # OneDrive internals — never contain real documents
+    # Cloud-sync temp directories — never contain auditable documents
     "OneDriveTemp", "OneDriveCloudTemp",
 }
 
@@ -55,7 +55,8 @@ _JUNK_SUFFIXES: tuple[str, ...] = (".tmp", ".crdownload", ".part", ".lock", ".ln
 def crawl_repository(folder_path: str, max_files: int | None = None) -> dict:
     """Walk a folder recursively and inventory every file with its metadata.
 
-    Skips SharePoint/OneDrive junk files (desktop.ini, ~$ lock files, .tmp, etc.).
+    Skips junk files (desktop.ini, ~$ lock files, .tmp, etc.) that don't contain
+    auditable content.
     Unreadable or cloud-only placeholder files are collected separately instead of
     silently dropped, so the caller can report them.
 
@@ -86,7 +87,7 @@ def crawl_repository(folder_path: str, max_files: int | None = None) -> dict:
             if filename.startswith("."):
                 continue
 
-            # ── Skip SharePoint/OneDrive junk ─────────────────────────────────
+            # ── Skip junk files ───────────────────────────────────────────────
             if name_lower in _SKIP_FILES:
                 continue
             if any(filename.startswith(p) for p in _JUNK_PREFIXES):
@@ -110,15 +111,14 @@ def crawl_repository(folder_path: str, max_files: int | None = None) -> dict:
 
             size = stat.st_size
 
-            # Zero-byte supported files are almost always OneDrive cloud-only
-            # placeholders ("Files On-Demand" not yet downloaded).
+            # Zero-byte supported files cannot be audited (empty or placeholder).
             if size == 0 and ext in SUPPORTED_EXTENSIONS:
                 unreadable_files.append({
                     "path":  full_path,
                     "name":  filename,
                     "error": (
-                        "Zero-byte file — may be an OneDrive cloud-only placeholder "
-                        "(file not downloaded). Open it in Windows to sync it first."
+                        "Zero-byte file — cannot be audited (empty or not fully "
+                        "downloaded). Ensure the file is accessible before scanning."
                     ),
                 })
                 continue

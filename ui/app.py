@@ -55,95 +55,6 @@ EXTRAPOLATION_FACTOR = 30_000
 LARGE_FOLDER_WARN = 2000   # warn (but don't block) when a folder exceeds this many files
 
 
-def _detect_cloud_folders() -> list[tuple[str, str]]:
-    """
-    Auto-detect synced OneDrive / SharePoint folders under /mnt/c/Users/ (WSL2).
-    Returns a list of (display_label, folder_path) tuples, capped at 8 entries.
-    Safe to call at import time — returns [] if the Windows FS is not mounted.
-    """
-    from pathlib import Path as _P
-    found: list[tuple[str, str]] = []
-    users_root = _P("/mnt/c/Users")
-    if not users_root.exists():
-        return found
-
-    _SYSTEM_USERS = {"Default", "Default User", "Public", "All Users",
-                     "TEMP", "desktop.ini"}
-
-    try:
-        user_dirs = sorted(users_root.iterdir())
-    except PermissionError:
-        return found
-
-    for user_dir in user_dirs:
-        if not user_dir.is_dir() or user_dir.name in _SYSTEM_USERS:
-            continue
-        if user_dir.name.startswith("."):
-            continue
-
-        # ── OneDrive folders (personal + work tenants) ────────────────────────
-        try:
-            onedrive_candidates = sorted(user_dir.glob("OneDrive*"))
-        except PermissionError:
-            continue
-        for p in onedrive_candidates:
-            if not p.is_dir():
-                continue
-            name_l = p.name.lower()
-            if "temp" in name_l or "cloud" in name_l:
-                continue  # skip OneDriveTemp / OneDriveCloudTemp
-            label = p.name if p.name != "OneDrive" else "OneDrive (Personal)"
-            found.append((f"☁  {label}", str(p)))
-
-        # ── SharePoint synced libraries ───────────────────────────────────────
-        # Pattern: ~/Company/SiteName - Library  (Company dir directly under user home)
-        # We only include dirs where a child matches the "SiteName - Library" naming.
-        _WINDOWS_PROFILE_DIRS = {
-            "AppData", "Documents", "Downloads", "Desktop", "Pictures",
-            "Music", "Videos", "Contacts", "Links", "Favorites", "Searches",
-            "Saved Games", "3D Objects", "Application Data", "Cookies",
-            "Local Settings", "My Documents", "NetHood", "PrintHood",
-            "Recent", "SendTo", "Start Menu", "Templates", "Roaming",
-            "IntelGraphicsProfiles", "genai_flask_app",
-        }
-        try:
-            company_dirs = sorted(user_dir.iterdir())
-        except PermissionError:
-            continue
-        for company_dir in company_dirs:
-            if not company_dir.is_dir():
-                continue
-            cn = company_dir.name
-            if cn.startswith(".") or cn in _SYSTEM_USERS or cn in _WINDOWS_PROFILE_DIRS:
-                continue
-            if cn.startswith("OneDrive"):
-                continue  # already handled above
-            # Only consider dirs that contain at least one "SiteName - Library" subdir
-            # — that's the SharePoint sync naming convention
-            try:
-                sp_libs = [
-                    d for d in company_dir.iterdir()
-                    if d.is_dir() and " - " in d.name
-                ]
-            except PermissionError:
-                continue
-            for lib_dir in sorted(sp_libs):
-                found.append((f"🏢  {lib_dir.name}", str(lib_dir)))
-
-    # Deduplicate by path, preserve order, cap at 8
-    seen: set[str] = set()
-    deduped: list[tuple[str, str]] = []
-    for lbl, pth in found:
-        if pth not in seen:
-            seen.add(pth)
-            deduped.append((lbl, pth))
-    return deduped[:8]
-
-
-# Detect at import time — fast, no FS writes
-_CLOUD_FOLDERS: list[tuple[str, str]] = _detect_cloud_folders()
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Tab 1 / 2 — pure-Python helpers (no LLM)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -411,55 +322,89 @@ def _get_file_path(f) -> str:
     return str(f)
 
 
-def run_audit_ui(folder: str, uploaded_files, extrapolate: bool):
-    """
-    Tab 1 'Run Audit' handler.
+# Return shape for both scan handlers:
+# (audit_state, docs_state, hero, stats, reasons_fig, doc_type_fig,
+#  table_rows, detail_md, source_label)
+_EMPTY_RESULT = (None, [], "", "", None, None, [], "_No data._", "")
 
-    COST GUARANTEE: this function calls audit_repository() — a 100% deterministic
-    Python pipeline with ZERO LLM calls, regardless of folder size.  The agent /
-    semantic layer is never invoked here and must never be added to this path.
 
-    Returns: (audit_state, docs_state, hero, stats, reasons_fig, doc_type_fig,
-              table_rows, detail_md)
+def _do_audit(target: str, extrapolate: bool, source_label: str) -> tuple:
     """
+    Shared audit engine used by both scan handlers.
+
+    COST GUARANTEE: calls audit_and_persist() which wraps audit_repository() —
+    a 100% deterministic Python pipeline with ZERO LLM calls regardless of
+    folder size or file count. DB writes are fire-and-forget; a DB outage
+    never breaks the scan. The agent/semantic layer is NEVER invoked here.
+    """
+    result      = audit_and_persist(target)
+    documents   = result.get("documents", [])
+    docs_sorted = sorted(documents, key=lambda d: d.get("trust_score", 1.0))
+
+    total_docs = result.get("headline", {}).get("total_documents", 0)
+    if total_docs >= LARGE_FOLDER_WARN:
+        result["_large_folder_warning"] = (
+            f"⚠️ Large folder: {total_docs:,} files scanned. "
+            "Results are complete — no files were skipped."
+        )
+
+    return (
+        result,
+        docs_sorted,
+        _hero_html(result, extrapolate),
+        _stats_html(result, extrapolate),
+        _reasons_fig(result),
+        _doc_type_fig(result),
+        _build_table_rows(docs_sorted),
+        "_Select a row to see document details._",
+        source_label,
+    )
+
+
+def run_folder_audit(folder: str, extrapolate: bool) -> tuple:
+    """Section 1 handler: scan a local / synced folder. Ignores any uploads."""
+    target = (folder or DEFAULT_FOLDER).strip()
+    if not os.path.isdir(target):
+        err = f"❌ Folder not found: `{target}`"
+        return (None, [], err, "", None, None, [], "_No data._", "")
+    try:
+        return _do_audit(target, extrapolate,
+                         source_label=f"📁 **Results for folder:** `{target}`")
+    except Exception as exc:
+        logger.exception(f"Folder audit error: {exc}")
+        return (None, [], f"❌ **Error:** {exc}", "", None, None, [], "_No data._", "")
+
+
+def run_upload_audit(uploaded_files, extrapolate: bool) -> tuple:
+    """Section 2 handler: audit only the uploaded file(s). Ignores folder path."""
+    if not uploaded_files:
+        msg = "⚠️ **Please upload at least one document before scanning.**"
+        return (None, [], msg, "", None, None, [], "_No data._", "")
+
     tmp_dir = None
     try:
-        if uploaded_files:
-            tmp_dir = tempfile.mkdtemp(prefix="sota_audit_")
-            for f in uploaded_files:
-                src = _get_file_path(f)
-                if src and os.path.isfile(src):
-                    shutil.copy(src, tmp_dir)
-            target = tmp_dir
-        else:
-            target = (folder or DEFAULT_FOLDER).strip()
+        tmp_dir = tempfile.mkdtemp(prefix="sota_audit_")
+        copied: list[str] = []
+        for f in uploaded_files:
+            src = _get_file_path(f)
+            if src and os.path.isfile(src):
+                shutil.copy(src, tmp_dir)
+                copied.append(os.path.basename(src))
 
-        result      = audit_and_persist(target)
-        documents   = result.get("documents", [])
-        docs_sorted = sorted(documents, key=lambda d: d.get("trust_score", 1.0))
+        if not copied:
+            return (None, [], "❌ No readable files found in the upload.", "",
+                    None, None, [], "_No data._", "")
 
-        # File-count guard — warn when real large folders are scanned
-        total_docs = result.get("headline", {}).get("total_documents", 0)
-        if total_docs >= LARGE_FOLDER_WARN:
-            result["_large_folder_warning"] = (
-                f"⚠️ Large folder: {total_docs:,} files scanned. "
-                f"Results above are complete — no files were skipped."
-            )
+        n = len(copied)
+        names_md = ", ".join(f"`{c}`" for c in copied[:3])
+        if n > 3:
+            names_md += f" +{n - 3} more"
+        label = f"📤 **Results for {n} uploaded file(s):** {names_md}"
+        return _do_audit(tmp_dir, extrapolate, source_label=label)
 
-        return (
-            result,
-            docs_sorted,
-            _hero_html(result, extrapolate),
-            _stats_html(result, extrapolate),
-            _reasons_fig(result),
-            _doc_type_fig(result),
-            _build_table_rows(docs_sorted),
-            "_Select a row to see document details._",
-        )
     except Exception as exc:
-        logger.exception(f"Audit error: {exc}")
-        err = f"❌ **Error:** {exc}"
-        return (None, [], err, "", None, None, [], "_No data._")
+        logger.exception(f"Upload audit error: {exc}")
+        return (None, [], f"❌ **Error:** {exc}", "", None, None, [], "_No data._", "")
     finally:
         if tmp_dir and os.path.isdir(tmp_dir):
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -469,19 +414,6 @@ def update_extrapolation(extrapolate: bool, result: dict | None):
     if not result:
         return "", ""
     return _hero_html(result, extrapolate), _stats_html(result, extrapolate)
-
-
-def _audit_target_label(files, folder: str) -> str:
-    """Return a markdown string describing what the next Run Audit will scan."""
-    if files:
-        paths = [_get_file_path(f) for f in files]
-        names = [os.path.basename(p) for p in paths if p]
-        display = " · ".join(f"`{n}`" for n in names[:4])
-        if len(names) > 4:
-            display += f" +{len(names) - 4} more"
-        return f"📄 **Will audit {len(names)} uploaded file(s):** {display}"
-    fp = (folder or DEFAULT_FOLDER).strip()
-    return f"📁 **Will audit folder:** `{fp}`"
 
 
 def select_doc_row(evt: gr.SelectData, docs: list) -> str:
@@ -863,6 +795,11 @@ def build_ui() -> gr.Blocks:
             # ═══════════════════════════════════════════════════════════════════
             with gr.Tab("🔍 Scan"):
 
+                # ═══════════════════════════════════════════════════════════════
+                # SECTION 1 — Scan a folder
+                # ═══════════════════════════════════════════════════════════════
+                gr.Markdown("### 📁 Scan a folder")
+
                 with gr.Row():
                     folder_input = gr.Textbox(
                         value=DEFAULT_FOLDER,
@@ -870,37 +807,46 @@ def build_ui() -> gr.Blocks:
                         placeholder="Absolute or relative path to your document repository",
                         scale=4,
                     )
-                    run_btn = gr.Button("▶  Run Audit", variant="primary", scale=1, min_width=140)
-
-                # ── Synced SharePoint / OneDrive quick-select ─────────────────
-                if _CLOUD_FOLDERS:
-                    cloud_dd = gr.Dropdown(
-                        choices=[(lbl, pth) for lbl, pth in _CLOUD_FOLDERS],
-                        value=None,
-                        label="☁  Scan a synced SharePoint / OneDrive folder "
-                              "(auto-detected)",
-                        interactive=True,
+                    scan_folder_btn = gr.Button(
+                        "📁 Scan Folder", variant="primary", scale=1, min_width=150
                     )
-                else:
-                    cloud_dd = None
 
-                file_upload_scan = gr.File(
-                    label="Or drag & drop your own files (PDF, DOCX, XLSX, PPTX, CSV, TXT, MD)",
-                    file_count="multiple",
-                    file_types=[".pdf", ".docx", ".xlsx", ".pptx", ".csv", ".txt", ".md", ".json"],
-                )
+                gr.Markdown("---")
 
-                audit_target_md = gr.Markdown(
-                    value=f"📁 **Will audit folder:** `{DEFAULT_FOLDER}`",
-                )
+                # ═══════════════════════════════════════════════════════════════
+                # SECTION 2 — Scan uploaded document(s)
+                # ═══════════════════════════════════════════════════════════════
+                gr.Markdown("### 📤 Scan uploaded document(s)")
 
+                with gr.Row():
+                    with gr.Column(scale=4):
+                        file_upload_scan = gr.File(
+                            label="Drag & drop files here (PDF, DOCX, XLSX, PPTX, "
+                                  "CSV, TXT, MD) — add or remove individually",
+                            file_count="multiple",
+                            file_types=[
+                                ".pdf", ".docx", ".xlsx", ".pptx",
+                                ".csv", ".txt", ".md", ".json",
+                            ],
+                        )
+                    with gr.Column(scale=1, min_width=160):
+                        scan_upload_btn = gr.Button(
+                            "📤 Scan Uploaded", variant="secondary", min_width=150
+                        )
+
+                gr.Markdown("---")
+
+                # ═══════════════════════════════════════════════════════════════
+                # SHARED OPTIONS + RESULTS
+                # ═══════════════════════════════════════════════════════════════
                 extrapolate_cb = gr.Checkbox(
-                    label=f"Extrapolate to full repository (×{EXTRAPOLATION_FACTOR:,}) — scales "
-                          f"document count & remediation hours for illustration only",
+                    label=f"Extrapolate to full repository (×{EXTRAPOLATION_FACTOR:,}) — "
+                          "scales document count & remediation hours for illustration only",
                     value=False,
                 )
 
-                gr.Markdown("---")
+                # Source label — updates after each scan to show what was audited
+                scan_source_md = gr.Markdown(value="")
 
                 # Hero + stat cards
                 hero_html  = gr.HTML(value="")
@@ -1029,39 +975,28 @@ def build_ui() -> gr.Blocks:
 
         # ── Wiring ────────────────────────────────────────────────────────────
 
-        # Tab 1 — Run Audit
-        run_btn.click(
-            run_audit_ui,
-            inputs=[folder_input, file_upload_scan, extrapolate_cb],
-            outputs=[
-                audit_state, docs_state,
-                hero_html, stats_html,
-                reasons_plot, doc_type_plot,
-                doc_table, detail_md,
-            ],
+        # ── Tab 1 — Scan Folder button ────────────────────────────────────────
+        _scan_outputs = [
+            audit_state, docs_state,
+            hero_html, stats_html,
+            reasons_plot, doc_type_plot,
+            doc_table, detail_md,
+            scan_source_md,
+        ]
+        scan_folder_btn.click(
+            run_folder_audit,
+            inputs=[folder_input, extrapolate_cb],
+            outputs=_scan_outputs,
         )
 
-        # Tab 1 — cloud folder dropdown → populate folder input
-        if cloud_dd is not None:
-            cloud_dd.change(
-                lambda v: v if v else gr.update(),
-                inputs=[cloud_dd],
-                outputs=[folder_input],
-            )
-
-        # Tab 1 — live audit-target indicator
-        file_upload_scan.change(
-            _audit_target_label,
-            inputs=[file_upload_scan, folder_input],
-            outputs=[audit_target_md],
-        )
-        folder_input.change(
-            _audit_target_label,
-            inputs=[file_upload_scan, folder_input],
-            outputs=[audit_target_md],
+        # ── Tab 1 — Scan Uploaded button ──────────────────────────────────────
+        scan_upload_btn.click(
+            run_upload_audit,
+            inputs=[file_upload_scan, extrapolate_cb],
+            outputs=_scan_outputs,
         )
 
-        # Tab 1 — extrapolation toggle re-renders hero + stats without re-running audit
+        # ── Tab 1 — extrapolation toggle re-renders without re-running audit ──
         extrapolate_cb.change(
             update_extrapolation,
             inputs=[extrapolate_cb, audit_state],
