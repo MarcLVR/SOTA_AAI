@@ -335,52 +335,81 @@ def run_semantic_check_ui(docs: list, row_idx: int | None) -> str:
     One LLM call, on demand, for the selected document only.
     Returns Markdown to display in the semantic result panel.
     """
+    # ── STEP 0: gate ──────────────────────────────────────────────────────────
+    logger.info(f"[semantic UI] button clicked — semantic_enabled={settings.semantic_enabled} "
+                f"row_idx={row_idx!r} (type={type(row_idx).__name__}) "
+                f"docs_count={len(docs) if docs else 0}")
+
     if not settings.semantic_enabled:
         return (
             "⚠️ **Semantic analysis is disabled.**  \n"
             "Set `SEMANTIC_ENABLED=true` in `.env` and restart to enable it."
         )
 
-    if row_idx is None or not docs:
-        return "_Select a document row first, then click the button._"
+    # ── STEP 1: validate row selection ────────────────────────────────────────
+    if not docs:
+        logger.warning("[semantic UI] STEP 1 FAIL — docs_state is empty, no scan has been run")
+        return "⚠️ **Run a folder or upload scan first** (Scan tab), then select a row here."
+
+    # If no row was explicitly selected, fall back to the first flagged document
+    if row_idx is None:
+        flagged = [i for i, d in enumerate(docs) if d.get("needs_supervision")]
+        row_idx = flagged[0] if flagged else 0
+        logger.info(f"[semantic UI] STEP 1 — no row selected, falling back to row {row_idx}")
 
     try:
         row_idx = int(row_idx)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.warning(f"[semantic UI] STEP 1 FAIL — cannot cast row_idx {row_idx!r}: {exc}")
         return "_Invalid row selection._"
 
     if row_idx >= len(docs):
+        logger.warning(f"[semantic UI] STEP 1 FAIL — row_idx={row_idx} >= docs_len={len(docs)}")
         return "_Row index out of range — re-run the audit and select a row._"
 
     doc      = docs[row_idx]
     doc_name = doc.get("name", "?")
     doc_type = doc.get("doc_type", "unknown")
+    doc_keys = list(doc.keys())
+    logger.info(f"[semantic UI] STEP 1 OK — doc={doc_name!r} type={doc_type!r} keys={doc_keys}")
+
+    # ── STEP 2: get text ──────────────────────────────────────────────────────
     doc_text = doc.get("text", "") or ""
+    logger.info(f"[semantic UI] STEP 2 — text from doc dict: {len(doc_text)} chars")
 
     # Fallback: re-extract if text was not stored in the audit result
     if not doc_text.strip():
         path = doc.get("path", "")
+        logger.info(f"[semantic UI] STEP 2 — text empty, trying re-extract from path={path!r}")
         if path:
             try:
                 from domain.tools.extractor import extract_document
                 doc_text = extract_document(path).get("text", "") or ""
-            except Exception:
-                pass
+                logger.info(f"[semantic UI] STEP 2 — re-extracted {len(doc_text)} chars")
+            except Exception as exc:
+                logger.warning(f"[semantic UI] STEP 2 — re-extract failed: {exc}")
 
     if not doc_text.strip():
+        logger.warning(f"[semantic UI] STEP 2 FAIL — no text for {doc_name!r}")
         return f"❌ `{doc_name}` has no extractable text — semantic check cannot run."
 
+    logger.info(f"[semantic UI] STEP 2 OK — {len(doc_text)} chars, excerpt[:80]={doc_text[:80]!r}")
+
+    # ── STEP 3: semantic_check ────────────────────────────────────────────────
+    logger.info(f"[semantic UI] STEP 3 — calling semantic_check(doc_type={doc_type!r})")
     try:
         findings = semantic_check(doc_text, doc_type=doc_type)
     except Exception as exc:
-        logger.warning(f"[semantic UI] unexpected error: {exc}")
+        logger.warning(f"[semantic UI] STEP 3 EXCEPTION: {exc}")
         findings = []
+
+    logger.info(f"[semantic UI] STEP 3 — semantic_check returned {len(findings)} finding(s)")
 
     if not findings:
         return (
-            f"⚠️ **Semantic check unavailable** for `{doc_name}`.  \n"
-            "ChromaDB may be empty or the model could not complete. "
-            "Check logs, or run `python -m scripts.load_standards` first."
+            f"⚠️ **Semantic check returned no results** for `{doc_name}`.  \n"
+            "ChromaDB may be empty, the model could not complete, or "
+            "`SEMANTIC_ENABLED` is not set. Check terminal logs for `[semantic]` lines."
         )
 
     return _semantic_result_md(doc_name, findings)
@@ -970,7 +999,10 @@ def build_ui() -> gr.Blocks:
                     size="sm",
                 )
                 semantic_md = gr.Markdown(
-                    value="_Select a document row and click the button above to run a semantic compliance check._"
+                    value=(
+                        "**Semantic compliance check** — click the button above after running "
+                        "a scan. If no row is selected, the first flagged document is used automatically."
+                    )
                 )
 
             # ═══════════════════════════════════════════════════════════════════
@@ -1100,7 +1132,10 @@ def build_ui() -> gr.Blocks:
 
         # Tab 2 — row selection → detail panel + record selected index
         def _select_and_track(evt: gr.SelectData, docs: list):
-            row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else int(evt.index)
+            raw = evt.index
+            row_idx = raw[0] if isinstance(raw, (list, tuple)) else int(raw)
+            logger.info(f"[semantic UI] row selected — evt.index={raw!r} → row_idx={row_idx}, "
+                        f"docs_count={len(docs) if docs else 0}")
             return _doc_detail_md(row_idx, docs), row_idx
 
         doc_table.select(
