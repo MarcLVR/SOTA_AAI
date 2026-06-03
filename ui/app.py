@@ -167,7 +167,7 @@ def _stats_html(result: dict, extrapolate: bool) -> str:
 
 def _reasons_fig(result: dict):
     if not result:
-        return None
+        return go.Figure().update_layout(title="Run a scan to see results")
     reasons = result.get("reasons", {})
     label_map = {
         "stale":               "Stale",
@@ -209,7 +209,7 @@ def _reasons_fig(result: dict):
 
 def _doc_type_fig(result: dict):
     if not result:
-        return None
+        return go.Figure().update_layout(title="Run a scan to see results")
     by_type = result.get("by_doc_type", {})
     if not by_type:
         return go.Figure().update_layout(title="No document-type data")
@@ -395,10 +395,17 @@ def run_semantic_check_ui(docs: list, row_idx: int | None) -> str:
 
     logger.info(f"[semantic UI] STEP 2 OK — {len(doc_text)} chars, excerpt[:80]={doc_text[:80]!r}")
 
-    # ── STEP 3: semantic_check ────────────────────────────────────────────────
+    # ── STEP 3: semantic_check (with hard timeout to prevent UI freeze) ──────
     logger.info(f"[semantic UI] STEP 3 — calling semantic_check(doc_type={doc_type!r})")
+    import concurrent.futures as _cf
     try:
-        findings = semantic_check(doc_text, doc_type=doc_type)
+        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+            _fut = _pool.submit(semantic_check, doc_text, doc_type)
+            try:
+                findings = _fut.result(timeout=30)  # 30s hard cap
+            except _cf.TimeoutError:
+                logger.warning("[semantic UI] STEP 3 TIMEOUT after 30s")
+                findings = []
     except Exception as exc:
         logger.warning(f"[semantic UI] STEP 3 EXCEPTION: {exc}")
         findings = []
@@ -431,7 +438,10 @@ def _get_file_path(f) -> str:
 # Return shape for both scan handlers:
 # (audit_state, docs_state, hero, stats, reasons_fig, doc_type_fig,
 #  table_rows, detail_md, source_label)
-_EMPTY_RESULT = (None, [], "", "", None, None, [], "_No data._", "")
+# IMPORTANT: gr.Plot with value=None stays in "processing" forever in Gradio 6.
+# Always return an empty Figure, never None, for plot outputs.
+_EMPTY_FIG = go.Figure().update_layout(title="")
+_EMPTY_RESULT = (None, [], "", "", _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
 
 
 def _do_audit(target: str, extrapolate: bool, source_label: str) -> tuple:
@@ -442,50 +452,71 @@ def _do_audit(target: str, extrapolate: bool, source_label: str) -> tuple:
     a 100% deterministic Python pipeline with ZERO LLM calls regardless of
     folder size or file count. DB writes are fire-and-forget; a DB outage
     never breaks the scan. The agent/semantic layer is NEVER invoked here.
+
+    Always returns the full 9-tuple even on internal failure — gr.Plot outputs
+    are ALWAYS valid Figure objects, never None (None leaves plots in
+    "processing" forever in Gradio 6).
     """
-    result      = audit_and_persist(target)
-    documents   = result.get("documents", [])
-    docs_sorted = sorted(documents, key=lambda d: d.get("trust_score", 1.0))
+    try:
+        result      = audit_and_persist(target)
+        documents   = result.get("documents", [])
+        docs_sorted = sorted(documents, key=lambda d: d.get("trust_score", 1.0))
 
-    total_docs = result.get("headline", {}).get("total_documents", 0)
-    if total_docs >= LARGE_FOLDER_WARN:
-        result["_large_folder_warning"] = (
-            f"⚠️ Large folder: {total_docs:,} files scanned. "
-            "Results are complete — no files were skipped."
+        total_docs = result.get("headline", {}).get("total_documents", 0)
+        if total_docs >= LARGE_FOLDER_WARN:
+            result["_large_folder_warning"] = (
+                f"⚠️ Large folder: {total_docs:,} files scanned. "
+                "Results are complete — no files were skipped."
+            )
+
+        reasons  = _reasons_fig(result)
+        doc_type = _doc_type_fig(result)
+
+        return (
+            result,
+            docs_sorted,
+            _hero_html(result, extrapolate),
+            _stats_html(result, extrapolate),
+            reasons  if reasons  is not None else _EMPTY_FIG,
+            doc_type if doc_type is not None else _EMPTY_FIG,
+            _build_table_rows(docs_sorted),
+            "_Select a row to see document details._",
+            source_label,
         )
-
-    return (
-        result,
-        docs_sorted,
-        _hero_html(result, extrapolate),
-        _stats_html(result, extrapolate),
-        _reasons_fig(result),
-        _doc_type_fig(result),
-        _build_table_rows(docs_sorted),
-        "_Select a row to see document details._",
-        source_label,
-    )
+    except Exception as exc:
+        logger.exception(f"[_do_audit] INTERNAL ERROR for {target!r}: {exc}")
+        return (
+            None, [],
+            f"❌ **Audit error:** {exc}", "",
+            _EMPTY_FIG, _EMPTY_FIG,
+            [], "_No data._", source_label,
+        )
 
 
 def run_folder_audit(folder: str, extrapolate: bool) -> tuple:
     """Section 1 handler: scan a local / synced folder. Ignores any uploads."""
+    logger.info(f"[run_folder_audit] START folder={folder!r}")
     target = (folder or DEFAULT_FOLDER).strip()
     if not os.path.isdir(target):
         err = f"❌ Folder not found: `{target}`"
-        return (None, [], err, "", None, None, [], "_No data._", "")
+        logger.warning(f"[run_folder_audit] END (folder not found)")
+        return (None, [], err, "", _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
     try:
-        return _do_audit(target, extrapolate,
-                         source_label=f"📁 **Results for folder:** `{target}`")
+        result = _do_audit(target, extrapolate,
+                           source_label=f"📁 **Results for folder:** `{target}`")
+        logger.info(f"[run_folder_audit] END OK docs={result[0]['headline']['total_documents'] if result[0] else 0}")
+        return result
     except Exception as exc:
-        logger.exception(f"Folder audit error: {exc}")
-        return (None, [], f"❌ **Error:** {exc}", "", None, None, [], "_No data._", "")
+        logger.exception(f"[run_folder_audit] END ERROR: {exc}")
+        return (None, [], f"❌ **Error:** {exc}", "", _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
 
 
 def run_upload_audit(uploaded_files, extrapolate: bool) -> tuple:
     """Section 2 handler: audit only the uploaded file(s). Ignores folder path."""
+    logger.info(f"[run_upload_audit] START files={len(uploaded_files) if uploaded_files else 0}")
     if not uploaded_files:
         msg = "⚠️ **Please upload at least one document before scanning.**"
-        return (None, [], msg, "", None, None, [], "_No data._", "")
+        return (None, [], msg, "", _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
 
     tmp_dir = None
     try:
@@ -499,18 +530,20 @@ def run_upload_audit(uploaded_files, extrapolate: bool) -> tuple:
 
         if not copied:
             return (None, [], "❌ No readable files found in the upload.", "",
-                    None, None, [], "_No data._", "")
+                    _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
 
         n = len(copied)
         names_md = ", ".join(f"`{c}`" for c in copied[:3])
         if n > 3:
             names_md += f" +{n - 3} more"
         label = f"📤 **Results for {n} uploaded file(s):** {names_md}"
-        return _do_audit(tmp_dir, extrapolate, source_label=label)
+        result = _do_audit(tmp_dir, extrapolate, source_label=label)
+        logger.info(f"[run_upload_audit] END OK files={n}")
+        return result
 
     except Exception as exc:
-        logger.exception(f"Upload audit error: {exc}")
-        return (None, [], f"❌ **Error:** {exc}", "", None, None, [], "_No data._", "")
+        logger.exception(f"[run_upload_audit] END ERROR: {exc}")
+        return (None, [], f"❌ **Error:** {exc}", "", _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
     finally:
         if tmp_dir and os.path.isdir(tmp_dir):
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -833,10 +866,12 @@ _ANALYTICS_DISABLED_HTML = (
 
 def run_analytics_ui():
     """Refresh handler for Tab 4 — queries Postgres and returns all chart data."""
-    _empty = (None, None, None, None, None)
+    logger.info("[run_analytics_ui] START")
+    _empty = (go.Figure(), go.Figure(), go.Figure(), go.Figure(), go.Figure())
 
     # Guard 1: analytics disabled via env flag — return immediately, no network call
     if not settings.db_enabled:
+        logger.info("[run_analytics_ui] END (DB disabled)")
         return (_ANALYTICS_DISABLED_HTML, *_empty, "")
 
     # Guard 2: DB reachable but query failed — show error, never hang
@@ -851,7 +886,7 @@ def run_analytics_ui():
         owners   = get_owners()
         timeline = get_timeline()
 
-        return (
+        result = (
             _analytics_kpi_html(stats),
             _severity_fig(sev),
             _status_fig(statuses),
@@ -860,8 +895,10 @@ def run_analytics_ui():
             _timeline_fig(timeline),
             "",
         )
+        logger.info("[run_analytics_ui] END OK")
+        return result
     except Exception as exc:
-        logger.warning(f"Analytics DB error: {exc}")
+        logger.warning(f"[run_analytics_ui] END ERROR: {exc}")
         err_html = (
             f'<div style="padding:16px;background:#fef2f2;border:1px solid #fecaca;'
             f'border-radius:8px;color:#991b1b;font-size:13px;">'
@@ -1202,9 +1239,10 @@ def build_ui() -> gr.Blocks:
         analytics_refresh_btn.click(run_analytics_ui, outputs=_analytics_outputs)
         analytics_tab.select(run_analytics_ui,         outputs=_analytics_outputs)
 
-        # Queue is required so slow/blocking handlers (analytics DB, chat streaming)
-        # run in worker threads and cannot freeze the Gradio event loop.
-        demo.queue()
+        # Queue: required so every handler runs in a worker thread, never on the
+        # event loop. max_size=20 prevents runaway queuing; concurrency_limit=4
+        # lets scan/semantic/chat run in parallel (not serially behind each other).
+        demo.queue(max_size=20, default_concurrency_limit=4)
 
     return demo
 
