@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "chase"))
 
 import requests
 
-from db import get_run, update_run_status
+from db import get_run, update_run_status, update_finding_status
 
 log = logging.getLogger("dave-executor")
 
@@ -107,7 +107,7 @@ Respond in JSON with this exact structure:
 
 def execute_fix(run_id: int) -> dict:
     """
-    Run the ReAct loop for all findings in a validation run.
+    Run the ReAct loop for pending findings in a validation run.
     Returns a summary dict with results per finding.
     """
     run = get_run(run_id)
@@ -118,7 +118,9 @@ def execute_fix(run_id: int) -> dict:
     document = run.get("doc_name") or run.get("document", "unknown")
     results = []
 
-    for finding in run["findings"]:
+    pending_findings = [f for f in run["findings"] if f.get("status", "pending") == "pending"]
+
+    for finding in pending_findings:
         # Support both old schema (title/suggestion) and real DB schema (rule_code/detail/proposed_fix)
         finding_label = finding.get("rule_code") or finding.get("title", "finding")
         finding_fix = finding.get("proposed_fix") or finding.get("suggestion", "")
@@ -141,6 +143,10 @@ def execute_fix(run_id: int) -> dict:
                 success = True
                 break
 
+        if success and finding.get("id"):
+            resolution = steps[-1].get("observation", "")[:500]
+            update_finding_status(finding["id"], "fixed", resolution=resolution)
+
         results.append({
             "finding": finding_label,
             "success": success,
@@ -148,7 +154,7 @@ def execute_fix(run_id: int) -> dict:
             "steps": steps,
         })
 
-    all_ok = all(r["success"] for r in results)
+    all_ok = all(r["success"] for r in results) if results else True
     update_run_status(run_id, "fixed" if all_ok else "partial_fix")
 
     return {
