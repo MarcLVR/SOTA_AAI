@@ -41,10 +41,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     name = update.effective_user.first_name or "usuario"
     await update.message.reply_text(
-        f"👋 Hola {name}, soy *DAVE* — Data Agentic Validation Engine.\n\n"
-        f"Recibirás aquí las notificaciones de validación de documentos.\n\n"
-        f"Tu Chat ID es: `{chat_id}`\n"
-        f"Compártelo con Luca para que pueda añadirte al sistema.",
+        f"👋 Hi {name}, I'm *DAVE* — Data Agentic Validation Engine.\n\n"
+        f"You'll receive document compliance notifications here.\n\n"
+        f"Your Chat ID is: `{chat_id}`\n"
+        f"Share it with Luca to be added to the system.",
         parse_mode="Markdown",
     )
     log.info("/start — user=%s chat_id=%d", name, chat_id)
@@ -59,11 +59,11 @@ async def _run_executor(run_id: int, chat_id: int, context: ContextTypes.DEFAULT
         return s.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
 
     if result.get("success"):
-        msg = f"✅ *Correcciones aplicadas* en `{_esc(result['document'])}`\n\n"
+        msg = f"✅ *Fixes applied* on `{_esc(result['document'])}`\n\n"
         for r in result["results"]:
-            msg += f"• {_esc(r['finding'])} — resuelto en {r['attempts']} intento(s)\n"
+            msg += f"• {_esc(r['finding'])} — resolved in {r['attempts']} attempt(s)\n"
     else:
-        msg = f"⚠️ *Corrección parcial* en `{_esc(result['document'])}`\n\n"
+        msg = f"⚠️ *Partial fix* on `{_esc(result['document'])}`\n\n"
         for r in result["results"]:
             icon = "✅" if r["success"] else "❌"
             msg += f"{icon} {_esc(r['finding'])}\n"
@@ -77,7 +77,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         err_text = f"{type(context.error).__name__}: {context.error}"
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=f"❌ Error interno de DAVE\n{err_text[:200]}",
+            text=f"❌ Internal DAVE error\n{err_text[:200]}",
         )
 
 
@@ -88,18 +88,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         action, run_id = query.data.split(":", 1)
     except ValueError:
-        await query.edit_message_text("❌ Callback inválido.")
+        await query.edit_message_text("❌ Invalid callback.")
         return
 
-    user = query.from_user.first_name or "desconocido"
+    user = query.from_user.first_name or "unknown"
     log.info("callback — action=%s run_id=%s user=%s", action, run_id, user)
 
     if action == "fix":
         update_run_status(int(run_id), "pending_fix")
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
-            f"✅ *DAVE está aplicando las correcciones...*\n"
-            f"Run #{run_id} · solicitado por {user}",
+            f"✅ *DAVE is applying fixes...*\n"
+            f"Run #{run_id} · requested by {user}",
             parse_mode="Markdown",
         )
         result = await context.application.create_task(
@@ -110,8 +110,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         update_run_status(int(run_id), "manual")
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
-            f"✏️ Marcado como *pendiente de corrección manual*.\n"
-            f"DAVE te recordará en 48h si no se resuelve. (Run #{run_id})",
+            f"✏️ Marked as *pending manual fix*.\n"
+            f"DAVE will remind you in 48h if unresolved. (Run #{run_id})",
             parse_mode="Markdown",
         )
 
@@ -119,25 +119,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         update_run_status(int(run_id), "ignored")
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
-            f"🚫 Hallazgo ignorado. (Run #{run_id})",
+            f"🚫 Finding ignored. (Run #{run_id})",
             parse_mode="Markdown",
         )
 
     elif action == "info":
         cached = load_cache(int(run_id))
         if not cached:
-            await query.message.reply_text("❌ No se encontraron detalles para este análisis.")
+            await query.message.reply_text("❌ No details found for this run.")
             return
 
-        lines = [f"🔍 *Detalles del análisis*\n`{cached['document']}`\n"]
+        lines = [f"🔍 *Finding details*\n`{cached['document']}`\n"]
         for i, f in enumerate(cached["findings"], 1):
             icon = SEVERITY_ICON.get(f.get("severity", "medium"), "🟡")
-            severity_label = {"high": "Alta", "medium": "Media", "low": "Baja"}.get(f.get("severity", "medium"), "Media")
+            severity_label = {"high": "High", "medium": "Medium", "low": "Low"}.get(f.get("severity", "medium"), "Medium")
             lines += [
-                f"*Hallazgo {i}* {icon} Severidad: {severity_label}",
-                f"• *Problema:* {f['title']}",
-                f"• *Ubicación:* {f['location']}",
-                f"• *Corrección sugerida:* {f['suggestion']}\n",
+                f"*Finding {i}* {icon} Severity: {severity_label}",
+                f"• *Issue:* {f['title']}",
+                f"• *Location:* {f['location']}",
+                f"• *Suggested fix:* {f['suggestion']}\n",
             ]
 
         await query.message.reply_text("\n".join(lines), parse_mode="Markdown")
