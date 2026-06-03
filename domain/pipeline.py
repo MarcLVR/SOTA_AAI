@@ -208,8 +208,18 @@ def run_audit_pipeline(document_results: list[dict], default_owner: str = "luca"
 
 
 def _resolve_owner(doc: dict, default: str) -> str:
-    """Try to map the document author to a known owner, else use default."""
-    author = (doc.get("embedded_metadata") or {}).get("author", "")
+    """Map the document author/creator metadata to a known owner, else default.
+
+    Each format exposes the author under a different key: .docx/.pptx use
+    "author", .xlsx uses "creator", .pdf uses "Author" (capitalised). Match the
+    key case-insensitively so every format routes, not just .docx/.pptx.
+    """
+    meta = doc.get("embedded_metadata") or {}
+    author = ""
+    for key, val in meta.items():
+        if val and key.lower() in ("author", "creator", "last_modified_by"):
+            author = str(val)
+            break
     if not author:
         return default
     author_lower = author.lower()
