@@ -250,6 +250,50 @@ def audit_repository_to_findings(folder: str) -> dict[str, list[dict]]:
     return out
 
 
+# ── Scan + persist (drop-in replacement for audit_repository) ────────────────
+
+def audit_and_persist(folder: str, default_owner: str = "augusto") -> dict:
+    """
+    Run audit_repository(folder), persist flagged findings to PostgreSQL, and
+    return the same result dict — drop-in replacement for audit_repository().
+
+    Callers (e.g. ui/app.py) only need to swap the function name; the return
+    value is identical so all downstream UI code keeps working unchanged.
+
+    default_owner: platform_username assigned to findings whose owner cannot
+    be inferred from the folder structure (used for demo / fallback).
+    DB errors are caught and logged so a DB outage never breaks the UI scan.
+    """
+    from domain.run_audit import audit_repository
+
+    result = audit_repository(folder)
+
+    import sys as _sys, os as _os
+    _chase = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "chase")
+    if _chase not in _sys.path:
+        _sys.path.insert(0, _chase)
+    from db import create_run
+
+    for doc in result.get("documents", []):
+        if not doc.get("needs_supervision", False):
+            continue
+        findings = audit_doc_to_findings(doc)
+        if not findings:
+            continue
+        try:
+            create_run(
+                document=doc.get("name", "unknown"),
+                owner=default_owner,
+                findings=findings,
+                doc_type=doc.get("doc_type", "unknown"),
+                doc_path=doc.get("path", ""),
+            )
+        except Exception as exc:
+            print(f"[adapter] DB persist skipped for {doc.get('name')!r}: {exc}")
+
+    return result
+
+
 # ── Smoke-test CLI ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

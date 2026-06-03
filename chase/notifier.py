@@ -1,5 +1,7 @@
 import json
 import os
+import threading
+import time
 from pathlib import Path
 
 import requests
@@ -97,6 +99,54 @@ def load_cache(run_id: int) -> dict | None:
         return cache.get(str(run_id))
     except Exception:
         return None
+
+
+def _poll_once() -> None:
+    """Single poll cycle: notify owners for every unnotified pending run."""
+    import sys as _sys, os as _os
+    _chase = _os.path.dirname(_os.path.abspath(__file__))
+    if _chase not in _sys.path:
+        _sys.path.insert(0, _chase)
+    from db import get_unnotified_pending_runs, mark_notified
+
+    runs = get_unnotified_pending_runs()
+    for run in runs:
+        run_id   = run["id"]
+        doc_name = run["doc_name"]
+
+        by_owner: dict[str, list] = {}
+        for f in run.get("findings", []):
+            owner = f.get("owner_username") or "nacho"
+            by_owner.setdefault(owner, []).append({
+                "title":      f.get("rule_code") or f.get("detail", "Issue"),
+                "location":   f.get("location", ""),
+                "suggestion": f.get("proposed_fix", ""),
+                "severity":   f.get("severity", "medium"),
+            })
+
+        notified_any = False
+        for owner, owner_findings in by_owner.items():
+            if send_finding(owner, doc_name, owner_findings, run_id=run_id):
+                notified_any = True
+                print(f"[notifier] ✉️  {owner} ← {doc_name!r} (run #{run_id})")
+
+        if notified_any:
+            mark_notified(run_id)
+
+
+def start_notifier_daemon(interval: int = 30) -> None:
+    """Start a background daemon that polls the DB every `interval` seconds."""
+    def _loop():
+        print(f"[notifier] Daemon started (poll every {interval}s)")
+        while True:
+            try:
+                _poll_once()
+            except Exception as exc:
+                print(f"[notifier] Poll error: {exc}")
+            time.sleep(interval)
+
+    t = threading.Thread(target=_loop, daemon=True, name="notifier-daemon")
+    t.start()
 
 
 def send_text(owner: str, text: str) -> bool:

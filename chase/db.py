@@ -128,6 +128,29 @@ def get_pending_runs() -> list[dict]:
         return [dict(r) for r in cur.fetchall()]
 
 
+def get_unnotified_pending_runs() -> list[dict]:
+    """Return pending runs that have at least one finding not yet notified, with those findings attached."""
+    with _conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT vr.*
+            FROM validation_runs vr
+            WHERE vr.status = 'pending'
+              AND EXISTS (
+                SELECT 1 FROM findings f
+                WHERE f.run_id = vr.id AND f.notified_at IS NULL
+              )
+            ORDER BY vr.started_at
+        """)
+        runs = [dict(r) for r in cur.fetchall()]
+        for run in runs:
+            cur.execute(
+                "SELECT * FROM findings WHERE run_id=%s AND notified_at IS NULL ORDER BY id",
+                (run["id"],),
+            )
+            run["findings"] = [dict(f) for f in cur.fetchall()]
+        return runs
+
+
 def get_telegram_chat_id(owner_username: str) -> int | None:
     """Look up telegram_chat_id from owner_map by platform_username."""
     with _conn() as conn, conn.cursor() as cur:

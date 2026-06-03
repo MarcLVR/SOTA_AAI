@@ -18,7 +18,9 @@ def launch_ui():
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "chase"))
     from telegram_bot import start_bot_background
+    from notifier import start_notifier_daemon
     start_bot_background()
+    start_notifier_daemon()
 
     from ui.app import build_ui
     app = build_ui()
