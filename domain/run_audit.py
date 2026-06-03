@@ -89,6 +89,7 @@ def audit_repository(folder: str, verbose: bool = False) -> dict:
             "modified_at":       modified_at,
             "extraction_ok":     extraction_ok,
             "embedded_metadata": embedded_metadata,
+            "text":              text,
             "staleness":         staleness,
             "standards":         standards,
             "governance":        governance,

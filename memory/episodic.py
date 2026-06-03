@@ -33,19 +33,20 @@ def _get_mem0():
     if _mem0_client is None:
         try:
             from mem0 import Memory  # type: ignore
+            from config import settings as _s
             config = {
                 "llm": {
                     "provider": "ollama",
                     "config": {
-                        "model": "llama3.2",
-                        "ollama_base_url": "http://localhost:11434",
+                        "model": _s.ollama_model,
+                        "ollama_base_url": _s.ollama_base_url,
                     }
                 },
                 "embedder": {
                     "provider": "ollama",
                     "config": {
-                        "model": "nomic-embed-text",
-                        "ollama_base_url": "http://localhost:11434",
+                        "model": _s.ollama_embed_model,
+                        "ollama_base_url": _s.ollama_base_url,
                     }
                 },
                 "vector_store": {

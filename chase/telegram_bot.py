@@ -55,17 +55,30 @@ async def _run_executor(run_id: int, chat_id: int, context: ContextTypes.DEFAULT
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, execute_fix, run_id)
 
+    def _esc(s: str) -> str:
+        return s.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+
     if result.get("success"):
-        msg = f"✅ *Correcciones aplicadas* en `{result['document']}`\n\n"
+        msg = f"✅ *Correcciones aplicadas* en `{_esc(result['document'])}`\n\n"
         for r in result["results"]:
-            msg += f"• {r['finding']} — resuelto en {r['attempts']} intento(s)\n"
+            msg += f"• {_esc(r['finding'])} — resuelto en {r['attempts']} intento(s)\n"
     else:
-        msg = f"⚠️ *Corrección parcial* en `{result['document']}`\n\n"
+        msg = f"⚠️ *Corrección parcial* en `{_esc(result['document'])}`\n\n"
         for r in result["results"]:
             icon = "✅" if r["success"] else "❌"
-            msg += f"{icon} {r['finding']}\n"
+            msg += f"{icon} {_esc(r['finding'])}\n"
 
     await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    log.error("Unhandled exception: %s", context.error, exc_info=context.error)
+    if isinstance(update, Update) and update.effective_chat:
+        err_text = f"{type(context.error).__name__}: {context.error}"
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"❌ Error interno de DAVE\n{err_text[:200]}",
+        )
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -165,6 +178,7 @@ def start_bot_background() -> None:
             app = Application.builder().token(BOT_TOKEN).build()
             app.add_handler(CommandHandler("start", start))
             app.add_handler(CallbackQueryHandler(handle_callback))
+            app.add_error_handler(error_handler)
 
             async with app:
                 await app.start()

@@ -5,64 +5,29 @@ Pattern: Thought → Action → Observation (max 3 attempts per finding).
 Triggered by telegram_bot when owner taps "Que DAVE lo corrija".
 """
 
-import os
-import sys
 import json
 import logging
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "chase"))
 
-import requests
-
-from db import get_run, update_run_status, update_finding_status
+from db import get_run, update_run_status
 
 log = logging.getLogger("dave-executor")
-
-LLM_PROVIDER  = os.getenv("LLM_PROVIDER", "groq")
-GROQ_API_KEY  = os.getenv("GROQ_API_KEY", "")
-ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 MAX_ATTEMPTS = 3
 
 
 # ---------------------------------------------------------------------------
-# LLM call (Groq or Anthropic)
+# LLM call — reuses the same factory as the rest of the app
 # ---------------------------------------------------------------------------
 
 def _call_llm(prompt: str) -> str:
-    if LLM_PROVIDER == "groq" and GROQ_API_KEY:
-        r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
-
-    elif ANTHROPIC_KEY:
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_KEY,
-                "anthropic-version": "2023-06-01",
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 1024,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
-        return r.json()["content"][0]["text"]
-
-    raise RuntimeError("No LLM provider configured (set GROQ_API_KEY or ANTHROPIC_API_KEY)")
+    from agents.llm import get_llm
+    llm = get_llm(role="executor")
+    response = llm.invoke(prompt)
+    return response.content if hasattr(response, "content") else str(response)
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +56,6 @@ Respond in JSON with this exact structure:
 
     raw = _call_llm(prompt)
 
-    # Extract JSON from response
     try:
         start = raw.index("{")
         end = raw.rindex("}") + 1
@@ -107,23 +71,19 @@ Respond in JSON with this exact structure:
 
 def execute_fix(run_id: int) -> dict:
     """
-    Run the ReAct loop for pending findings in a validation run.
+    Run the ReAct loop for all findings in a validation run.
     Returns a summary dict with results per finding.
     """
     run = get_run(run_id)
     if not run:
         return {"success": False, "error": f"Run #{run_id} not found"}
 
-    # Support both old schema (document) and real DB schema (doc_name)
     document = run.get("doc_name") or run.get("document", "unknown")
     results = []
 
-    pending_findings = [f for f in run["findings"] if f.get("status", "pending") == "pending"]
-
-    for finding in pending_findings:
-        # Support both old schema (title/suggestion) and real DB schema (rule_code/detail/proposed_fix)
+    for finding in run["findings"]:
         finding_label = finding.get("rule_code") or finding.get("title", "finding")
-        finding_fix = finding.get("proposed_fix") or finding.get("suggestion", "")
+        finding_fix   = finding.get("proposed_fix") or finding.get("suggestion", "")
 
         log.info("Fixing: %s", finding_label)
         steps = []
@@ -143,18 +103,14 @@ def execute_fix(run_id: int) -> dict:
                 success = True
                 break
 
-        if success and finding.get("id"):
-            resolution = steps[-1].get("observation", "")[:500]
-            update_finding_status(finding["id"], "fixed", resolution=resolution)
-
         results.append({
-            "finding": finding_label,
-            "success": success,
+            "finding":  finding_label,
+            "success":  success,
             "attempts": len(steps),
-            "steps": steps,
+            "steps":    steps,
         })
 
-    all_ok = all(r["success"] for r in results) if results else True
+    all_ok = all(r["success"] for r in results)
     update_run_status(run_id, "fixed" if all_ok else "partial_fix")
 
     return {
@@ -170,12 +126,18 @@ def execute_fix(run_id: int) -> dict:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import os
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+    # Load .env when run directly
+    env_file = Path(__file__).resolve().parent.parent / ".env"
+    if env_file.exists():
+        from dotenv import load_dotenv
+        load_dotenv(env_file)
 
     if len(sys.argv) < 2:
         print("Usage: python3 executor.py <run_id>")
         sys.exit(1)
 
-    run_id = int(sys.argv[1])
-    result = execute_fix(run_id)
+    result = execute_fix(int(sys.argv[1]))
     print(json.dumps(result, indent=2, ensure_ascii=False))
