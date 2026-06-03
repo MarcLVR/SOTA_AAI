@@ -27,436 +27,6 @@ from memory import ingest_documents, get_all_memories
 from guardrails import input_guard
 
 
-# ── EDS design tokens & chart palette ────────────────────────────────────────
-
-_EDS = {
-    "background":     "#F6F7F8",
-    "surface":        "#FFFFFF",
-    "foreground":     "#0D1116",
-    "body":           "#1E2934",
-    "subhead":        "#3D546A",
-    "muted":          "#92A9C0",
-    "primary":        "#0066AA",
-    "primary_hover":  "#004C80",
-    "primary_accent": "#D8E4F4",
-    "primary_fg":     "#FFFFFF",
-    "success":        "#20AD69",
-    "success_accent": "#C6F3DF",
-    "warning":        "#E3C041",
-    "warning_accent": "#FBF4CC",
-    "danger":         "#970125",
-    "danger_accent":  "#FCDAD7",
-    "divider":        "#3D546A",
-    "card_border":    "#1E2934",
-}
-
-_EDS_CHART = [
-    "#7DA6DB", "#888AE1", "#F488CF", "#CA96E3",
-    "#D75684", "#FF7E7F", "#FF8E4C", "#FFA600",
-]
-
-_EDS_FONT = "-apple-system, 'Segoe UI', Roboto, sans-serif"
-
-
-def _eds_fig(fig, **layout_extra):
-    """Apply EDS tokens to any Plotly figure — transparent bg, correct fonts/gridlines."""
-    axis = dict(
-        gridcolor="rgba(61,84,106,0.15)",
-        linecolor="rgba(61,84,106,0.3)",
-        tickcolor="rgba(61,84,106,0.3)",
-        zerolinecolor="rgba(61,84,106,0.2)",
-        tickfont=dict(color=_EDS["body"], family=_EDS_FONT, size=11),
-        titlefont=dict(color=_EDS["subhead"], family=_EDS_FONT, size=12),
-    )
-    fig.update_layout(
-        font=dict(family=_EDS_FONT, color=_EDS["body"], size=12),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        colorway=_EDS_CHART,
-        xaxis=axis, yaxis=axis,
-        title_font=dict(family=_EDS_FONT, color=_EDS["foreground"], size=14, weight="bold"),
-        legend=dict(font=dict(family=_EDS_FONT, color=_EDS["body"], size=11)),
-        **layout_extra,
-    )
-    return fig
-
-
-_EDS_CSS = """
-/* ══════════════════════════════════════════════════════════════
-   DAVE Enterprise Design System — Full Structural + Visual CSS
-   ══════════════════════════════════════════════════════════════ */
-
-/* ── 1. DESIGN TOKENS ──────────────────────────────────────── */
-:root {
-  --eds-bg:             #F6F7F8;
-  --eds-surface:        #FFFFFF;
-  --eds-foreground:     #0D1116;
-  --eds-body:           #1E2934;
-  --eds-subhead:        #3D546A;
-  --eds-muted:          #92A9C0;
-  --eds-primary:        #0066AA;
-  --eds-primary-hover:  #004C80;
-  --eds-primary-accent: #D8E4F4;
-  --eds-primary-fg:     #FFFFFF;
-  --eds-success:        #20AD69;
-  --eds-success-accent: #C6F3DF;
-  --eds-warning:        #E3C041;
-  --eds-warning-accent: #FBF4CC;
-  --eds-danger:         #970125;
-  --eds-danger-accent:  #FCDAD7;
-  --eds-divider:        rgba(61,84,106,0.25);
-  --eds-font:           -apple-system, "Segoe UI", Roboto, sans-serif;
-  --eds-shadow:         0px 1px 10px 0px rgba(0,0,0,0.12),
-                        0px 4px 5px  0px rgba(0,0,0,0.14),
-                        0px 2px 4px -1px rgba(0,0,0,0.2);
-  --eds-shadow-sm:      0px 1px 4px 0px rgba(0,0,0,0.10),
-                        0px 2px 3px 0px rgba(0,0,0,0.08);
-  --eds-focus:          0px 0px 0px 2px rgba(115,157,211,0.35);
-}
-
-/* ── 2. PAGE & CENTERED CONTAINER ──────────────────────────── */
-html, body {
-  background: var(--eds-bg) !important;
-  margin: 0 !important;
-}
-.gradio-container {
-  background: var(--eds-bg) !important;
-  font-family: var(--eds-font) !important;
-  color: var(--eds-body) !important;
-  padding: 0 !important;
-  max-width: 100% !important;
-  min-height: 100vh !important;
-}
-/* The actual content lives inside .contain — center + constrain it */
-.contain {
-  max-width: 1200px !important;
-  margin: 0 auto !important;
-  padding: 0 24px 48px !important;
-  background: transparent !important;
-}
-.app { background: var(--eds-bg) !important; }
-
-/* ── 3. HEADER BAND ──────────────────────────────────────────
-   #app-header = the title markdown block
-   Renders as a white elevated banner above the tabs.          */
-#app-header {
-  background: var(--eds-surface) !important;
-  box-shadow: var(--eds-shadow) !important;
-  border-radius: 0 !important;
-  border: none !important;
-  margin: 0 -24px 24px !important;     /* break out of .contain padding → full bleed */
-  padding: 24px 48px !important;
-}
-#app-header h1 {
-  font-size: 32px !important;
-  font-weight: 500 !important;
-  line-height: 1.2 !important;
-  color: var(--eds-foreground) !important;
-  margin: 0 0 2px !important;
-  letter-spacing: -0.01em !important;
-}
-/* The second line (tagline) — p tag with the tech stack text */
-#app-header p, #app-header .prose p {
-  font-size: 11px !important;
-  font-weight: 500 !important;
-  color: var(--eds-muted) !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.12em !important;
-  line-height: 1.4 !important;
-  margin: 0 !important;
-}
-/* Strip bold from tagline */
-#app-header strong { font-weight: 500 !important; color: var(--eds-muted) !important; }
-
-/* ── 4. RESET GRADIO CHROME ─────────────────────────────────
-   Remove all Gradio default borders / backgrounds from blocks
-   so our card system is the only visual layer.                */
-.block, .block.padded, .block.stretch, .form, .gr-group,
-.gap, .gr-box, .panel, .gr-panel {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  border-radius: 0 !important;
-}
-/* The tab panel wrapper also needs to be transparent */
-.tabitem, .tab-pane, [role="tabpanel"] {
-  background: transparent !important;
-  border: none !important;
-  padding: 0 !important;
-}
-
-/* ── 5. TABS — white card floating on grey ──────────────────
-   The entire tabs component (nav + content) is one white card */
-.tabs {
-  background: var(--eds-surface) !important;
-  box-shadow: var(--eds-shadow) !important;
-  border-radius: 3px !important;
-  border: 1px solid var(--eds-divider) !important;
-  overflow: visible !important;
-}
-.tab-nav {
-  background: var(--eds-surface) !important;
-  border-bottom: 1px solid var(--eds-divider) !important;
-  padding: 0 8px !important;
-  border-radius: 3px 3px 0 0 !important;
-  gap: 0 !important;
-}
-.tab-nav button {
-  color: var(--eds-muted) !important;
-  font-family: var(--eds-font) !important;
-  font-size: 14px !important;
-  font-weight: 500 !important;
-  border: none !important;
-  border-bottom: 2px solid transparent !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  padding: 14px 20px 12px !important;
-  margin-bottom: -1px !important;
-  cursor: pointer !important;
-  transition: color 0.15s, border-color 0.15s !important;
-}
-.tab-nav button:hover {
-  color: var(--eds-subhead) !important;
-}
-.tab-nav button.selected,
-.tab-nav button[aria-selected="true"] {
-  color: var(--eds-primary) !important;
-  border-bottom: 2px solid var(--eds-primary) !important;
-  font-weight: 600 !important;
-}
-/* Tab content area */
-.tabitem > .gap,
-.tabitem > div,
-[role="tabpanel"] > .gap,
-[role="tabpanel"] > div {
-  padding: 24px !important;
-  background: var(--eds-surface) !important;
-}
-
-/* ── 6. SECTION CARDS — major content groupings ─────────────
-   The primary action row and results group each float as cards */
-
-/* Primary action row: folder input + Run Audit button */
-#primary-action-row {
-  background: var(--eds-bg) !important;
-  border: 1px solid var(--eds-divider) !important;
-  border-radius: 3px !important;
-  padding: 16px !important;
-  margin-bottom: 16px !important;
-  box-shadow: var(--eds-shadow-sm) !important;
-  align-items: flex-end !important;
-  gap: 12px !important;
-}
-/* Restore backgrounds for blocks inside the action row */
-#primary-action-row .block {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  padding: 0 !important;
-}
-
-/* Scan results group (hero + stats + charts) */
-#scan-results {
-  background: var(--eds-surface) !important;
-  border: 1px solid var(--eds-divider) !important;
-  border-radius: 3px !important;
-  box-shadow: var(--eds-shadow) !important;
-  padding: 24px !important;
-  margin-top: 8px !important;
-}
-#scan-results .block {
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-/* Document detail panel in Tab 2 */
-.tabitem .prose {
-  background: var(--eds-surface) !important;
-  border-radius: 3px !important;
-  padding: 16px !important;
-}
-
-/* ── 7. COMPACT UPLOAD ZONE ─────────────────────────────────
-   The file drop zone was taking 40%+ of the viewport.         */
-#scan-upload {
-  margin-bottom: 16px !important;
-}
-#scan-upload .wrap,
-#scan-upload .file-upload,
-#scan-upload .upload-container,
-#scan-upload > .block > .wrap {
-  max-height: 140px !important;
-  min-height: 80px !important;
-  overflow: hidden !important;
-}
-/* All file upload areas */
-.upload-container, .file-upload, [data-testid="file-upload"] {
-  border: 1.5px dashed var(--eds-divider) !important;
-  border-radius: 3px !important;
-  background: var(--eds-bg) !important;
-  max-height: 160px !important;
-}
-
-/* ── 8. INPUTS ─────────────────────────────────────────────── */
-input[type="text"],
-input[type="number"],
-input[type="search"],
-input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
-textarea {
-  background: var(--eds-surface) !important;
-  border: 1px solid rgba(61,84,106,0.45) !important;
-  border-radius: 3px !important;
-  color: var(--eds-body) !important;
-  font-family: var(--eds-font) !important;
-  font-size: 14px !important;
-  line-height: 1.5 !important;
-  transition: border-color 0.15s, box-shadow 0.15s !important;
-  box-shadow: none !important;
-}
-input:focus, textarea:focus {
-  border-color: var(--eds-primary) !important;
-  box-shadow: var(--eds-focus) !important;
-  outline: none !important;
-}
-input::placeholder, textarea::placeholder {
-  color: var(--eds-muted) !important;
-  font-size: 14px !important;
-}
-
-/* ── 9. BUTTONS ────────────────────────────────────────────── */
-button.primary, button.primary:not(:disabled) {
-  background: var(--eds-primary) !important;
-  color: var(--eds-primary-fg) !important;
-  border: 1px solid var(--eds-primary) !important;
-  border-radius: 3px !important;
-  font-family: var(--eds-font) !important;
-  font-size: 14px !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.02em !important;
-  padding: 10px 20px !important;
-  cursor: pointer !important;
-  box-shadow: none !important;
-  transition: background 0.15s, border-color 0.15s !important;
-}
-button.primary:hover:not(:disabled) {
-  background: var(--eds-primary-hover) !important;
-  border-color: var(--eds-primary-hover) !important;
-}
-button.primary:focus-visible {
-  box-shadow: var(--eds-focus) !important;
-  outline: none !important;
-}
-button.secondary {
-  background: var(--eds-surface) !important;
-  color: var(--eds-primary) !important;
-  border: 1px solid var(--eds-primary) !important;
-  border-radius: 3px !important;
-  font-family: var(--eds-font) !important;
-  font-size: 14px !important;
-  font-weight: 500 !important;
-}
-button.secondary:hover { background: var(--eds-primary-accent) !important; }
-button { border-radius: 3px !important; font-family: var(--eds-font) !important; }
-/* Remove orange/yellow from Gradio stop button */
-button.stop, button.stop:hover { background: var(--eds-danger) !important; border-color: var(--eds-danger) !important; color: #fff !important; }
-
-/* ── 10. LABELS ─────────────────────────────────────────────── */
-label > span,
-.label-wrap > span,
-.block > label > span {
-  color: var(--eds-subhead) !important;
-  font-size: 11px !important;
-  font-weight: 700 !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.07em !important;
-  font-family: var(--eds-font) !important;
-  margin-bottom: 6px !important;
-  display: block !important;
-}
-input[type="checkbox"] { accent-color: var(--eds-primary) !important; }
-/* Checkbox label text should not be uppercase */
-.block label:has(input[type="checkbox"]) > span {
-  text-transform: none !important;
-  letter-spacing: 0 !important;
-  font-size: 13px !important;
-  font-weight: 400 !important;
-  color: var(--eds-body) !important;
-}
-
-/* ── 11. TYPOGRAPHY ─────────────────────────────────────────── */
-.gradio-container, .prose, p, span, li, td {
-  font-family: var(--eds-font) !important;
-}
-.prose h1 { font-size: 32px !important; font-weight: 500 !important; line-height: 1.2 !important; color: var(--eds-foreground) !important; }
-.prose h2 { font-size: 22px !important; font-weight: 600 !important; line-height: 1.2 !important; color: var(--eds-foreground) !important; }
-.prose h3 { font-size: 16px !important; font-weight: 600 !important; line-height: 1.2 !important; color: var(--eds-subhead) !important; margin-top: 20px !important; }
-.prose h4 { font-size: 14px !important; font-weight: 600 !important; line-height: 1.2 !important; color: var(--eds-subhead) !important; }
-.prose p, .prose li { font-size: 14px !important; line-height: 1.6 !important; color: var(--eds-body) !important; }
-.prose strong { color: var(--eds-foreground) !important; }
-.prose em     { color: var(--eds-subhead) !important; font-style: italic !important; }
-.prose a      { color: var(--eds-primary) !important; text-decoration: none !important; }
-.prose a:hover { color: var(--eds-primary-hover) !important; text-decoration: underline !important; }
-.prose code, code {
-  background: var(--eds-primary-accent) !important;
-  color: var(--eds-primary) !important;
-  border-radius: 3px !important;
-  padding: 1px 5px !important;
-  font-size: 12px !important;
-  border: none !important;
-}
-.prose hr { border-color: var(--eds-divider) !important; margin: 16px 0 !important; }
-
-/* ── 12. DATAFRAME / TABLE ──────────────────────────────────── */
-.table-wrap {
-  border-radius: 3px !important;
-  overflow: hidden !important;
-  border: 1px solid var(--eds-divider) !important;
-  box-shadow: var(--eds-shadow-sm) !important;
-}
-table { width: 100% !important; border-collapse: collapse !important; }
-table th {
-  background: var(--eds-bg) !important;
-  color: var(--eds-foreground) !important;
-  font-family: var(--eds-font) !important;
-  font-size: 11px !important;
-  font-weight: 700 !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.07em !important;
-  border-bottom: 2px solid rgba(61,84,106,0.3) !important;
-  padding: 10px 14px !important;
-  white-space: nowrap !important;
-}
-table td {
-  border-bottom: 1px solid rgba(61,84,106,0.1) !important;
-  color: var(--eds-body) !important;
-  font-family: var(--eds-font) !important;
-  font-size: 13px !important;
-  padding: 9px 14px !important;
-  vertical-align: middle !important;
-}
-table tr:last-child td { border-bottom: none !important; }
-table tbody tr:hover td { background: var(--eds-primary-accent) !important; cursor: pointer !important; }
-
-/* ── 13. CHATBOT ─────────────────────────────────────────────── */
-.bubble-wrap, .chatbot          { background: var(--eds-bg) !important; }
-.message                        { border-radius: 3px !important; font-family: var(--eds-font) !important; }
-.message.user                   { background: var(--eds-primary-accent) !important; color: var(--eds-body) !important; }
-.message.bot, .message.assistant { background: var(--eds-surface) !important; border: 1px solid var(--eds-divider) !important; color: var(--eds-body) !important; }
-.message-content                 { color: var(--eds-body) !important; font-size: 14px !important; line-height: 1.6 !important; }
-
-/* ── 14. ANALYTICS TAB SPACING ──────────────────────────────── */
-/* Give analytics section breathing room */
-.tabitem .block.gr-group + .block.gr-group { margin-top: 16px !important; }
-
-/* ── 15. SCROLLBAR ──────────────────────────────────────────── */
-::-webkit-scrollbar       { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: var(--eds-bg); }
-::-webkit-scrollbar-thumb { background: var(--eds-muted); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--eds-subhead); }
-"""
-
-
 # ── chase/db lazy import helper ──────────────────────────────────────────────
 
 def _chase_db():
@@ -509,28 +79,24 @@ def _hero_html(result: dict, extrapolate: bool) -> str:
         count = round(count * EXTRAPOLATION_FACTOR)
         total = round(total * EXTRAPOLATION_FACTOR)
         note = (
-            f'<div style="font-size:12px;color:{_EDS["muted"]};margin-top:6px;'
-            f'font-family:{_EDS_FONT};">'
+            f'<div style="font-size:12px;color:#6b7280;margin-top:6px;">'
             f'extrapolated ×{EXTRAPOLATION_FACTOR:,} — actual corpus data scaled for illustration'
             f'</div>'
         )
 
     if pct >= 50:
-        color, bg = _EDS["danger"],  _EDS["danger_accent"]
+        color, bg = "#dc2626", "#fee2e2"
     elif pct >= 30:
-        color, bg = "#8a6e00",       _EDS["warning_accent"]
+        color, bg = "#d97706", "#fef3c7"
     else:
-        color, bg = _EDS["success"], _EDS["success_accent"]
+        color, bg = "#16a34a", "#dcfce7"
 
     return (
         f'<div style="text-align:center;padding:28px 20px;background:{bg};'
-        f'border-radius:3px;margin:8px 0;'
-        f'box-shadow:0px 1px 10px 0px rgba(0,0,0,0.12),0px 4px 5px 0px rgba(0,0,0,0.14);">'
-        f'<div style="font-size:80px;font-weight:500;color:{color};line-height:1.05;'
-        f'font-family:{_EDS_FONT};">'
+        f'border-radius:14px;margin:8px 0;">'
+        f'<div style="font-size:80px;font-weight:900;color:{color};line-height:1.05;">'
         f'{pct}%</div>'
-        f'<div style="font-size:19px;color:{_EDS["body"]};margin-top:8px;'
-        f'font-family:{_EDS_FONT};">'
+        f'<div style="font-size:19px;color:#374151;margin-top:8px;">'
         f'<strong>{count:,}</strong> of <strong>{total:,}</strong> documents need supervision'
         f'</div>'
         f'{note}'
@@ -561,18 +127,15 @@ def _stats_html(result: dict, extrapolate: bool) -> str:
         ("🕐", hours_label,                               "Est. remediation"),
     ]
     inner = "".join(
-        f'<div style="flex:1;min-width:110px;background:{_EDS["surface"]};'
-        f'border:1px solid rgba(30,41,52,0.1);padding:14px 10px;border-radius:3px;'
-        f'text-align:center;box-shadow:0px 1px 10px 0px rgba(0,0,0,0.12),'
-        f'0px 4px 5px 0px rgba(0,0,0,0.14);">'
+        f'<div style="flex:1;min-width:110px;background:#f9fafb;border:1px solid #e5e7eb;'
+        f'padding:14px 10px;border-radius:10px;text-align:center;">'
         f'<div style="font-size:22px;">{icon}</div>'
-        f'<div style="font-size:17px;font-weight:700;color:{_EDS["foreground"]};'
-        f'margin:4px 0;font-family:{_EDS_FONT};">{val}</div>'
-        f'<div style="font-size:11px;color:{_EDS["muted"]};text-transform:uppercase;'
-        f'letter-spacing:.06em;font-family:{_EDS_FONT};">{lbl}</div></div>'
+        f'<div style="font-size:17px;font-weight:700;color:#111827;margin:4px 0;">{val}</div>'
+        f'<div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;">'
+        f'{lbl}</div></div>'
         for icon, val, lbl in cards
     )
-    return f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin:10px 0;">{inner}</div>'
+    return f'<div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">{inner}</div>'
 
 
 def _reasons_fig(result: dict):
@@ -595,23 +158,26 @@ def _reasons_fig(result: dict):
     items.sort(key=lambda x: x[1])  # ascending → largest bar at top
 
     if not items:
-        return _eds_fig(go.Figure(), title="No flagged documents")
+        return go.Figure().update_layout(title="No flagged documents")
 
     fig = go.Figure(go.Bar(
         x=[i[1] for i in items],
         y=[i[0] for i in items],
         orientation="h",
-        marker_color=_EDS["danger"],
+        marker_color="#ef4444",
         text=[str(i[1]) for i in items],
         textposition="outside",
-        textfont=dict(family=_EDS_FONT, color=_EDS["body"], size=11),
     ))
-    return _eds_fig(fig,
+    fig.update_layout(
         title="Top reasons for flagging",
         xaxis_title="Documents",
         height=360,
         margin=dict(l=210, r=60, t=50, b=40),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(size=12),
     )
+    return fig
 
 
 def _doc_type_fig(result: dict):
@@ -619,26 +185,29 @@ def _doc_type_fig(result: dict):
         return None
     by_type = result.get("by_doc_type", {})
     if not by_type:
-        return _eds_fig(go.Figure(), title="No document-type data")
+        return go.Figure().update_layout(title="No document-type data")
 
     types   = list(by_type.keys())
     counts  = [v["count"]   for v in by_type.values()]
     flagged = [v["flagged"] for v in by_type.values()]
 
     fig = go.Figure(data=[
-        go.Bar(name="Total",   x=types, y=counts,  marker_color=_EDS_CHART[0]),
-        go.Bar(name="Flagged", x=types, y=flagged, marker_color=_EDS["danger"]),
+        go.Bar(name="Total",   x=types, y=counts,  marker_color="#3b82f6"),
+        go.Bar(name="Flagged", x=types, y=flagged, marker_color="#ef4444"),
     ])
-    return _eds_fig(fig,
+    fig.update_layout(
         barmode="group",
         title="By document type",
         xaxis_title="Type",
         yaxis_title="Count",
         height=300,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                    font=dict(family=_EDS_FONT, color=_EDS["body"], size=11)),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=50, r=20, t=60, b=50),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(size=12),
     )
+    return fig
 
 
 def _build_table_rows(docs_sorted: list) -> list[list]:
@@ -952,147 +521,134 @@ def new_session() -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _analytics_kpi_html(s: dict) -> str:
-    fix_color = (
-        _EDS["success"] if s["fix_rate"] >= 70
-        else ("8a6e00" if s["fix_rate"] >= 40 else _EDS["danger"])
-    )
+    fix_color = "#16a34a" if s["fix_rate"] >= 70 else ("#d97706" if s["fix_rate"] >= 40 else "#dc2626")
     cards = [
-        ("🗂️", str(s["total_runs"]),    "Validation runs", _EDS["foreground"]),
-        ("🔍", str(s["total_findings"]), "Total findings",  _EDS["foreground"]),
-        ("🔴", str(s["open"]),           "Open",            _EDS["danger"]),
-        ("✅", f'{s["fix_rate"]}%',      "Fix rate",        fix_color),
+        ("🗂️", str(s["total_runs"]),                      "Validation runs"),
+        ("🔍", str(s["total_findings"]),                   "Total findings"),
+        ("🔴", str(s["open"]),                             "Open"),
+        ("✅", f'{s["fix_rate"]}%',                        "Fix rate", fix_color),
     ]
     inner = "".join(
-        f'<div style="flex:1;min-width:110px;background:{_EDS["surface"]};'
-        f'border:1px solid rgba(30,41,52,0.1);padding:14px 10px;border-radius:3px;'
-        f'text-align:center;box-shadow:0px 1px 10px 0px rgba(0,0,0,0.12),'
-        f'0px 4px 5px 0px rgba(0,0,0,0.14);">'
+        f'<div style="flex:1;min-width:110px;background:#f9fafb;border:1px solid #e5e7eb;'
+        f'padding:14px 10px;border-radius:10px;text-align:center;">'
         f'<div style="font-size:22px;">{icon}</div>'
-        f'<div style="font-size:20px;font-weight:700;color:{val_color};'
-        f'margin:4px 0;font-family:{_EDS_FONT};">{val}</div>'
-        f'<div style="font-size:11px;color:{_EDS["muted"]};text-transform:uppercase;'
-        f'letter-spacing:.06em;font-family:{_EDS_FONT};">{lbl}</div>'
+        f'<div style="font-size:20px;font-weight:700;color:{c[3] if len(c)>3 else "#111827"};margin:4px 0;">{val}</div>'
+        f'<div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;">{lbl}</div>'
         f'</div>'
-        for icon, val, lbl, val_color in cards
+        for c in cards for icon, val, lbl, *_ in [c]
     )
-    return f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin:10px 0;">{inner}</div>'
+    return f'<div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">{inner}</div>'
 
 
 def _severity_fig(rows: list[dict]):
     if not rows:
-        return _eds_fig(go.Figure(), title="No findings")
-    color_map = {
-        "high":   _EDS["danger"],
-        "medium": _EDS["warning"],
-        "low":    _EDS["success"],
-    }
-    labels = [r["severity"] for r in rows]
-    values = [r["count"]    for r in rows]
-    colors = [color_map.get(s, _EDS["muted"]) for s in labels]
+        return go.Figure().update_layout(title="No findings")
+    color_map = {"high": "#ef4444", "medium": "#f59e0b", "low": "#22c55e"}
+    labels  = [r["severity"] for r in rows]
+    values  = [r["count"]    for r in rows]
+    colors  = [color_map.get(s, "#9ca3af") for s in labels]
     fig = go.Figure(go.Pie(
         labels=labels, values=values, marker_colors=colors,
         hole=0.45, textinfo="label+percent",
-        textfont=dict(family=_EDS_FONT, color=_EDS["body"], size=11),
     ))
-    return _eds_fig(fig,
+    fig.update_layout(
         title="Findings by severity", height=300,
-        margin=dict(l=20, r=20, t=50, b=20), showlegend=False,
+        margin=dict(l=20, r=20, t=50, b=20),
+        paper_bgcolor="white", showlegend=False,
     )
+    return fig
 
 
 def _status_fig(rows: list[dict]):
     if not rows:
-        return _eds_fig(go.Figure(), title="No findings")
-    color_map = {
-        "pending":     _EDS["danger"],
-        "fixed":       _EDS["success"],
-        "manual":      _EDS_CHART[0],
-        "ignored":     _EDS["muted"],
-        "partial_fix": _EDS["warning"],
-        "pending_fix": _EDS_CHART[1],
-    }
+        return go.Figure().update_layout(title="No findings")
+    color_map = {"pending": "#ef4444", "fixed": "#22c55e",
+                 "manual": "#3b82f6", "ignored": "#9ca3af",
+                 "partial_fix": "#f59e0b", "pending_fix": "#a855f7"}
     labels = [r["status"] for r in rows]
     values = [r["count"]  for r in rows]
-    colors = [color_map.get(s, _EDS["subhead"]) for s in labels]
+    colors = [color_map.get(s, "#6b7280") for s in labels]
     fig = go.Figure(go.Bar(
         x=labels, y=values, marker_color=colors,
         text=values, textposition="outside",
-        textfont=dict(family=_EDS_FONT, color=_EDS["body"], size=11),
     ))
-    return _eds_fig(fig,
+    fig.update_layout(
         title="Findings by status", height=300,
         margin=dict(l=40, r=20, t=50, b=50),
+        plot_bgcolor="white", paper_bgcolor="white",
+        yaxis=dict(showgrid=True, gridcolor="#f3f4f6"),
     )
+    return fig
 
 
 def _rules_fig(rows: list[dict]):
     if not rows:
-        return _eds_fig(go.Figure(), title="No rule data")
+        return go.Figure().update_layout(title="No rule data")
     items = [(r["rule_code"], r["count"]) for r in rows]
     items.sort(key=lambda x: x[1])
     fig = go.Figure(go.Bar(
         x=[i[1] for i in items], y=[i[0] for i in items],
-        orientation="h", marker_color=_EDS_CHART[1],
+        orientation="h", marker_color="#6366f1",
         text=[str(i[1]) for i in items], textposition="outside",
-        textfont=dict(family=_EDS_FONT, color=_EDS["body"], size=11),
     ))
-    return _eds_fig(fig,
+    fig.update_layout(
         title="Top violation types", height=360,
         margin=dict(l=200, r=60, t=50, b=40),
+        plot_bgcolor="white", paper_bgcolor="white",
+        font=dict(size=12),
     )
+    return fig
 
 
 def _owners_fig(rows: list[dict]):
     if not rows:
-        return _eds_fig(go.Figure(), title="No owner data")
+        return go.Figure().update_layout(title="No owner data")
     owners   = [r["owner_username"] for r in rows]
     open_v   = [r["open"]     for r in rows]
     resolved = [r["resolved"] for r in rows]
     fig = go.Figure(data=[
-        go.Bar(name="Open",     x=owners, y=open_v,   marker_color=_EDS["danger"]),
-        go.Bar(name="Resolved", x=owners, y=resolved, marker_color=_EDS["success"]),
+        go.Bar(name="Open",     x=owners, y=open_v,   marker_color="#ef4444"),
+        go.Bar(name="Resolved", x=owners, y=resolved, marker_color="#22c55e"),
     ])
-    return _eds_fig(fig,
-        barmode="group", title="Findings by owner", height=300,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                    xanchor="right", x=1,
-                    font=dict(family=_EDS_FONT, color=_EDS["body"], size=11)),
+    fig.update_layout(
+        barmode="group", title="Findings by owner",
+        height=300, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=40, r=20, t=60, b=50),
+        plot_bgcolor="white", paper_bgcolor="white",
     )
+    return fig
 
 
 def _timeline_fig(rows: list[dict]):
     if not rows:
-        return _eds_fig(go.Figure(), title="No run history yet")
+        return go.Figure().update_layout(title="No run history yet")
     days = [r["day"]  for r in rows]
     runs = [r["runs"] for r in rows]
     fig = go.Figure(go.Scatter(
         x=days, y=runs, mode="lines+markers",
-        line=dict(color=_EDS_CHART[0], width=2),
-        marker=dict(size=6, color=_EDS_CHART[0]),
-        fill="tozeroy",
-        fillcolor=f"rgba(125,166,219,0.12)",
+        line=dict(color="#6366f1", width=2),
+        marker=dict(size=6),
+        fill="tozeroy", fillcolor="rgba(99,102,241,0.1)",
     ))
-    return _eds_fig(fig,
+    fig.update_layout(
         title="Validation runs over time", height=250,
         margin=dict(l=40, r=20, t=50, b=50),
-        xaxis=dict(showgrid=False),
+        plot_bgcolor="white", paper_bgcolor="white",
+        xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor="#f3f4f6"),
     )
+    return fig
 
 
 _ANALYTICS_DISABLED_HTML = (
-    f'<div style="padding:32px 24px;background:{_EDS["surface"]};'
-    f'border:1px solid rgba(30,41,52,0.1);border-radius:3px;text-align:center;'
-    f'box-shadow:0px 1px 10px 0px rgba(0,0,0,0.12),0px 4px 5px 0px rgba(0,0,0,0.14);">'
-    f'<div style="font-size:32px;margin-bottom:8px;">📊</div>'
-    f'<div style="font-size:16px;font-weight:600;margin-bottom:6px;'
-    f'color:{_EDS["foreground"]};font-family:{_EDS_FONT};">'
-    f'Analytics not connected</div>'
-    f'<div style="font-size:13px;color:{_EDS["subhead"]};font-family:{_EDS_FONT};">'
-    f'Set <code>DB_ENABLED=true</code> and configure '
-    f'<code>DB_HOST</code> / <code>DB_NAME</code> / <code>DB_USER</code> / '
-    f'<code>DB_PASSWORD</code> in <code>.env</code> to enable the PostgreSQL '
-    f'analytics dashboard.</div></div>'
+    '<div style="padding:24px;background:#f9fafb;border:1px solid #e5e7eb;'
+    'border-radius:10px;text-align:center;color:#6b7280;">'
+    '<div style="font-size:32px;margin-bottom:8px;">📊</div>'
+    '<div style="font-size:16px;font-weight:600;margin-bottom:6px;">'
+    'Analytics not connected</div>'
+    '<div style="font-size:13px;">Set <code>DB_ENABLED=true</code> and configure '
+    '<code>DB_HOST</code> / <code>DB_NAME</code> / <code>DB_USER</code> / '
+    '<code>DB_PASSWORD</code> in <code>.env</code> to enable the PostgreSQL '
+    'analytics dashboard.</div></div>'
 )
 
 
@@ -1152,8 +708,7 @@ def build_ui() -> gr.Blocks:
 
         gr.Markdown(
             "# AI-Readiness Dashboard\n"
-            "Auditor · LangGraph · Reflexion · HITL · RAG · Mem0",
-            elem_id="app-header",
+            "**Auditor · LangGraph · Reflexion · HITL · RAG · Mem0**"
         )
 
         # ── Shared state (accessible from all tabs) ───────────────────────────
@@ -1167,7 +722,7 @@ def build_ui() -> gr.Blocks:
             # ═══════════════════════════════════════════════════════════════════
             with gr.Tab("🔍 Scan"):
 
-                with gr.Row(elem_id="primary-action-row"):
+                with gr.Row():
                     folder_input = gr.Textbox(
                         value=DEFAULT_FOLDER,
                         label="Folder path",
@@ -1180,7 +735,6 @@ def build_ui() -> gr.Blocks:
                     label="Or drag & drop your own files (PDF, DOCX, XLSX, PPTX, CSV, TXT, MD)",
                     file_count="multiple",
                     file_types=[".pdf", ".docx", ".xlsx", ".pptx", ".csv", ".txt", ".md", ".json"],
-                    elem_id="scan-upload",
                 )
 
                 extrapolate_cb = gr.Checkbox(
@@ -1189,15 +743,16 @@ def build_ui() -> gr.Blocks:
                     value=False,
                 )
 
-                # Hero + stat cards + charts — all inside one elevated results group
-                with gr.Group(elem_id="scan-results"):
-                    hero_html  = gr.HTML(value="")
-                    stats_html = gr.HTML(value="")
+                gr.Markdown("---")
 
-                    # Charts
-                    with gr.Row():
-                        reasons_plot  = gr.Plot(label="Top reasons for flagging")
-                        doc_type_plot = gr.Plot(label="By document type")
+                # Hero + stat cards
+                hero_html  = gr.HTML(value="")
+                stats_html = gr.HTML(value="")
+
+                # Charts
+                with gr.Row():
+                    reasons_plot  = gr.Plot(label="Top reasons for flagging")
+                    doc_type_plot = gr.Plot(label="By document type")
 
             # ═══════════════════════════════════════════════════════════════════
             # TAB 2 — DOCUMENTS
