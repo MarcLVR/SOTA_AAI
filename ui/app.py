@@ -83,11 +83,12 @@ def _eds_fig(fig, **layout_extra):
 
 _EDS_CSS = """
 /* ══════════════════════════════════════════════════════════════
-   DAVE Enterprise Design System — CSS tokens + overrides
+   DAVE Enterprise Design System — Full Structural + Visual CSS
    ══════════════════════════════════════════════════════════════ */
 
+/* ── 1. DESIGN TOKENS ──────────────────────────────────────── */
 :root {
-  --eds-background:     #F6F7F8;
+  --eds-bg:             #F6F7F8;
   --eds-surface:        #FFFFFF;
   --eds-foreground:     #0D1116;
   --eds-body:           #1E2934;
@@ -103,115 +104,101 @@ _EDS_CSS = """
   --eds-warning-accent: #FBF4CC;
   --eds-danger:         #970125;
   --eds-danger-accent:  #FCDAD7;
-  --eds-divider:        #3D546A;
-  --eds-card-border:    #1E2934;
+  --eds-divider:        rgba(61,84,106,0.25);
   --eds-font:           -apple-system, "Segoe UI", Roboto, sans-serif;
-  --eds-shadow-card:    0px 1px 10px 0px rgba(0,0,0,0.12),
+  --eds-shadow:         0px 1px 10px 0px rgba(0,0,0,0.12),
                         0px 4px 5px  0px rgba(0,0,0,0.14),
                         0px 2px 4px -1px rgba(0,0,0,0.2);
-  --eds-shadow-focus:   0px 0px 0px 2px rgba(115,157,211,0.2);
-  --eds-shadow-dropdown:0px 3px 14px 2px rgba(0,0,0,0.12),
-                        0px 8px 10px 1px rgba(0,0,0,0.14),
-                        0px 5px 5px -3px rgba(0,0,0,0.2);
+  --eds-shadow-sm:      0px 1px 4px 0px rgba(0,0,0,0.10),
+                        0px 2px 3px 0px rgba(0,0,0,0.08);
+  --eds-focus:          0px 0px 0px 2px rgba(115,157,211,0.35);
 }
 
-/* ── Page & container ─────────────────────────────────────── */
-body { background: var(--eds-background) !important; }
+/* ── 2. PAGE & CENTERED CONTAINER ──────────────────────────── */
+html, body {
+  background: var(--eds-bg) !important;
+  margin: 0 !important;
+}
 .gradio-container {
-  background: var(--eds-background) !important;
+  background: var(--eds-bg) !important;
   font-family: var(--eds-font) !important;
   color: var(--eds-body) !important;
-  max-width: 1440px !important;
+  padding: 0 !important;
+  max-width: 100% !important;
+  min-height: 100vh !important;
 }
-.contain, .app { background: var(--eds-background) !important; }
+/* The actual content lives inside .contain — center + constrain it */
+.contain {
+  max-width: 1200px !important;
+  margin: 0 auto !important;
+  padding: 0 24px 48px !important;
+  background: transparent !important;
+}
+.app { background: var(--eds-bg) !important; }
 
-/* ── Typography ───────────────────────────────────────────── */
-.gradio-container, .gradio-container p, .gradio-container span {
-  font-family: var(--eds-font) !important;
-}
-.prose h1, h1 {
-  font-size: 36px !important; font-weight: 500 !important;
-  line-height: 1.2 !important; color: var(--eds-foreground) !important;
-  margin-bottom: 4px !important;
-}
-.prose h2, h2 {
-  font-size: 24px !important; font-weight: 600 !important;
-  line-height: 1.2 !important; color: var(--eds-foreground) !important;
-}
-.prose h3, h3 {
-  font-size: 18px !important; font-weight: 600 !important;
-  line-height: 1.2 !important; color: var(--eds-subhead) !important;
-}
-.prose h4, h4 {
-  font-size: 16px !important; font-weight: 600 !important;
-  line-height: 1.2 !important; color: var(--eds-subhead) !important;
-}
-.prose p, .prose li {
-  font-size: 14px !important; line-height: 1.5 !important;
-  color: var(--eds-body) !important;
-}
-.prose strong, strong { color: var(--eds-foreground) !important; }
-.prose em, em         { color: var(--eds-subhead) !important; }
-.prose code, code, .prose pre code {
-  background: var(--eds-primary-accent) !important;
-  color: var(--eds-primary) !important;
-  border-radius: 3px !important;
-  padding: 1px 5px !important;
-  font-size: 12px !important;
+/* ── 3. HEADER BAND ──────────────────────────────────────────
+   #app-header = the title markdown block
+   Renders as a white elevated banner above the tabs.          */
+#app-header {
+  background: var(--eds-surface) !important;
+  box-shadow: var(--eds-shadow) !important;
+  border-radius: 0 !important;
   border: none !important;
+  margin: 0 -24px 24px !important;     /* break out of .contain padding → full bleed */
+  padding: 24px 48px !important;
 }
-.prose a { color: var(--eds-primary) !important; }
-.prose a:hover { color: var(--eds-primary-hover) !important; }
-.prose hr { border-color: rgba(61,84,106,0.2) !important; }
-
-/* ── PRIMARY BUTTONS — EDS Blue #0066AA ───────────────────── */
-button.primary {
-  background-color: var(--eds-primary) !important;
-  color: var(--eds-primary-fg) !important;
-  border: 1px solid var(--eds-primary) !important;
-  border-radius: 3px !important;
-  font-family: var(--eds-font) !important;
-  font-size: 14px !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.02em !important;
-  box-shadow: none !important;
-  transition: background-color 0.15s ease !important;
-}
-button.primary:hover {
-  background-color: var(--eds-primary-hover) !important;
-  border-color: var(--eds-primary-hover) !important;
-  box-shadow: var(--eds-shadow-card) !important;
-}
-button.primary:focus-visible {
-  box-shadow: var(--eds-shadow-focus) !important;
-  outline: none !important;
-}
-
-/* ── SECONDARY BUTTONS ─────────────────────────────────────── */
-button.secondary {
-  background-color: var(--eds-surface) !important;
-  color: var(--eds-primary) !important;
-  border: 1px solid var(--eds-primary) !important;
-  border-radius: 3px !important;
-  font-family: var(--eds-font) !important;
-  font-size: 14px !important;
+#app-header h1 {
+  font-size: 32px !important;
   font-weight: 500 !important;
-  transition: background-color 0.15s ease !important;
+  line-height: 1.2 !important;
+  color: var(--eds-foreground) !important;
+  margin: 0 0 2px !important;
+  letter-spacing: -0.01em !important;
 }
-button.secondary:hover {
-  background-color: var(--eds-primary-accent) !important;
+/* The second line (tagline) — p tag with the tech stack text */
+#app-header p, #app-header .prose p {
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  color: var(--eds-muted) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.12em !important;
+  line-height: 1.4 !important;
+  margin: 0 !important;
 }
-/* Generic fallback for any unlabelled button */
-button {
-  border-radius: 3px !important;
-  font-family: var(--eds-font) !important;
+/* Strip bold from tagline */
+#app-header strong { font-weight: 500 !important; color: var(--eds-muted) !important; }
+
+/* ── 4. RESET GRADIO CHROME ─────────────────────────────────
+   Remove all Gradio default borders / backgrounds from blocks
+   so our card system is the only visual layer.                */
+.block, .block.padded, .block.stretch, .form, .gr-group,
+.gap, .gr-box, .panel, .gr-panel {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+/* The tab panel wrapper also needs to be transparent */
+.tabitem, .tab-pane, [role="tabpanel"] {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
 }
 
-/* ── TABS ──────────────────────────────────────────────────── */
-.tabs { background: var(--eds-surface) !important; }
+/* ── 5. TABS — white card floating on grey ──────────────────
+   The entire tabs component (nav + content) is one white card */
+.tabs {
+  background: var(--eds-surface) !important;
+  box-shadow: var(--eds-shadow) !important;
+  border-radius: 3px !important;
+  border: 1px solid var(--eds-divider) !important;
+  overflow: visible !important;
+}
 .tab-nav {
   background: var(--eds-surface) !important;
-  border-bottom: 1px solid rgba(61,84,106,0.25) !important;
+  border-bottom: 1px solid var(--eds-divider) !important;
+  padding: 0 8px !important;
+  border-radius: 3px 3px 0 0 !important;
   gap: 0 !important;
 }
 .tab-nav button {
@@ -219,124 +206,252 @@ button {
   font-family: var(--eds-font) !important;
   font-size: 14px !important;
   font-weight: 500 !important;
+  border: none !important;
   border-bottom: 2px solid transparent !important;
   border-radius: 0 !important;
   background: transparent !important;
-  padding: 12px 20px !important;
-  transition: color 0.15s, border-color 0.15s, background 0.15s !important;
+  padding: 14px 20px 12px !important;
+  margin-bottom: -1px !important;
+  cursor: pointer !important;
+  transition: color 0.15s, border-color 0.15s !important;
 }
 .tab-nav button:hover {
   color: var(--eds-subhead) !important;
-  background: var(--eds-primary-accent) !important;
 }
 .tab-nav button.selected,
 .tab-nav button[aria-selected="true"] {
   color: var(--eds-primary) !important;
   border-bottom: 2px solid var(--eds-primary) !important;
   font-weight: 600 !important;
+}
+/* Tab content area */
+.tabitem > .gap,
+.tabitem > div,
+[role="tabpanel"] > .gap,
+[role="tabpanel"] > div {
+  padding: 24px !important;
+  background: var(--eds-surface) !important;
+}
+
+/* ── 6. SECTION CARDS — major content groupings ─────────────
+   The primary action row and results group each float as cards */
+
+/* Primary action row: folder input + Run Audit button */
+#primary-action-row {
+  background: var(--eds-bg) !important;
+  border: 1px solid var(--eds-divider) !important;
+  border-radius: 3px !important;
+  padding: 16px !important;
+  margin-bottom: 16px !important;
+  box-shadow: var(--eds-shadow-sm) !important;
+  align-items: flex-end !important;
+  gap: 12px !important;
+}
+/* Restore backgrounds for blocks inside the action row */
+#primary-action-row .block {
   background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
 }
 
-/* ── BLOCKS & PANELS ──────────────────────────────────────── */
-.block {
-  background: var(--eds-surface) !important;
-  border-radius: 3px !important;
-  border-color: rgba(30,41,52,0.1) !important;
-}
-/* Give blocks the card shadow only when they look like cards */
-.form, .block.gr-group, .gr-box {
-  background: var(--eds-surface) !important;
-  border-radius: 3px !important;
-  border: 1px solid rgba(30,41,52,0.1) !important;
-  box-shadow: var(--eds-shadow-card) !important;
-}
-
-/* ── INPUTS & TEXTBOXES ───────────────────────────────────── */
-.block input[type="text"],
-.block input[type="number"],
-.block input:not([type="checkbox"]):not([type="radio"]),
-.block textarea,
-input.gr-text-input,
-textarea.gr-text-input {
+/* Scan results group (hero + stats + charts) */
+#scan-results {
   background: var(--eds-surface) !important;
   border: 1px solid var(--eds-divider) !important;
+  border-radius: 3px !important;
+  box-shadow: var(--eds-shadow) !important;
+  padding: 24px !important;
+  margin-top: 8px !important;
+}
+#scan-results .block {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Document detail panel in Tab 2 */
+.tabitem .prose {
+  background: var(--eds-surface) !important;
+  border-radius: 3px !important;
+  padding: 16px !important;
+}
+
+/* ── 7. COMPACT UPLOAD ZONE ─────────────────────────────────
+   The file drop zone was taking 40%+ of the viewport.         */
+#scan-upload {
+  margin-bottom: 16px !important;
+}
+#scan-upload .wrap,
+#scan-upload .file-upload,
+#scan-upload .upload-container,
+#scan-upload > .block > .wrap {
+  max-height: 140px !important;
+  min-height: 80px !important;
+  overflow: hidden !important;
+}
+/* All file upload areas */
+.upload-container, .file-upload, [data-testid="file-upload"] {
+  border: 1.5px dashed var(--eds-divider) !important;
+  border-radius: 3px !important;
+  background: var(--eds-bg) !important;
+  max-height: 160px !important;
+}
+
+/* ── 8. INPUTS ─────────────────────────────────────────────── */
+input[type="text"],
+input[type="number"],
+input[type="search"],
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+textarea {
+  background: var(--eds-surface) !important;
+  border: 1px solid rgba(61,84,106,0.45) !important;
   border-radius: 3px !important;
   color: var(--eds-body) !important;
   font-family: var(--eds-font) !important;
   font-size: 14px !important;
   line-height: 1.5 !important;
   transition: border-color 0.15s, box-shadow 0.15s !important;
+  box-shadow: none !important;
 }
-.block input:focus, .block textarea:focus,
 input:focus, textarea:focus {
   border-color: var(--eds-primary) !important;
-  box-shadow: var(--eds-shadow-focus) !important;
+  box-shadow: var(--eds-focus) !important;
   outline: none !important;
 }
 input::placeholder, textarea::placeholder {
   color: var(--eds-muted) !important;
+  font-size: 14px !important;
 }
 
-/* ── LABELS ────────────────────────────────────────────────── */
-.block label > span,
-.label-wrap span,
-span.svelte-1b6s6xi {
-  color: var(--eds-subhead) !important;
-  font-size: 12px !important;
+/* ── 9. BUTTONS ────────────────────────────────────────────── */
+button.primary, button.primary:not(:disabled) {
+  background: var(--eds-primary) !important;
+  color: var(--eds-primary-fg) !important;
+  border: 1px solid var(--eds-primary) !important;
+  border-radius: 3px !important;
+  font-family: var(--eds-font) !important;
+  font-size: 14px !important;
   font-weight: 600 !important;
+  letter-spacing: 0.02em !important;
+  padding: 10px 20px !important;
+  cursor: pointer !important;
+  box-shadow: none !important;
+  transition: background 0.15s, border-color 0.15s !important;
+}
+button.primary:hover:not(:disabled) {
+  background: var(--eds-primary-hover) !important;
+  border-color: var(--eds-primary-hover) !important;
+}
+button.primary:focus-visible {
+  box-shadow: var(--eds-focus) !important;
+  outline: none !important;
+}
+button.secondary {
+  background: var(--eds-surface) !important;
+  color: var(--eds-primary) !important;
+  border: 1px solid var(--eds-primary) !important;
+  border-radius: 3px !important;
+  font-family: var(--eds-font) !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+}
+button.secondary:hover { background: var(--eds-primary-accent) !important; }
+button { border-radius: 3px !important; font-family: var(--eds-font) !important; }
+/* Remove orange/yellow from Gradio stop button */
+button.stop, button.stop:hover { background: var(--eds-danger) !important; border-color: var(--eds-danger) !important; color: #fff !important; }
+
+/* ── 10. LABELS ─────────────────────────────────────────────── */
+label > span,
+.label-wrap > span,
+.block > label > span {
+  color: var(--eds-subhead) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
   text-transform: uppercase !important;
-  letter-spacing: 0.06em !important;
+  letter-spacing: 0.07em !important;
+  font-family: var(--eds-font) !important;
+  margin-bottom: 6px !important;
+  display: block !important;
+}
+input[type="checkbox"] { accent-color: var(--eds-primary) !important; }
+/* Checkbox label text should not be uppercase */
+.block label:has(input[type="checkbox"]) > span {
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  color: var(--eds-body) !important;
+}
+
+/* ── 11. TYPOGRAPHY ─────────────────────────────────────────── */
+.gradio-container, .prose, p, span, li, td {
   font-family: var(--eds-font) !important;
 }
-
-/* ── CHECKBOXES ────────────────────────────────────────────── */
-input[type="checkbox"] { accent-color: var(--eds-primary) !important; }
-
-/* ── DATAFRAME / TABLE ─────────────────────────────────────── */
-.table-wrap {
-  background: var(--eds-surface) !important;
+.prose h1 { font-size: 32px !important; font-weight: 500 !important; line-height: 1.2 !important; color: var(--eds-foreground) !important; }
+.prose h2 { font-size: 22px !important; font-weight: 600 !important; line-height: 1.2 !important; color: var(--eds-foreground) !important; }
+.prose h3 { font-size: 16px !important; font-weight: 600 !important; line-height: 1.2 !important; color: var(--eds-subhead) !important; margin-top: 20px !important; }
+.prose h4 { font-size: 14px !important; font-weight: 600 !important; line-height: 1.2 !important; color: var(--eds-subhead) !important; }
+.prose p, .prose li { font-size: 14px !important; line-height: 1.6 !important; color: var(--eds-body) !important; }
+.prose strong { color: var(--eds-foreground) !important; }
+.prose em     { color: var(--eds-subhead) !important; font-style: italic !important; }
+.prose a      { color: var(--eds-primary) !important; text-decoration: none !important; }
+.prose a:hover { color: var(--eds-primary-hover) !important; text-decoration: underline !important; }
+.prose code, code {
+  background: var(--eds-primary-accent) !important;
+  color: var(--eds-primary) !important;
   border-radius: 3px !important;
-  border: 1px solid rgba(30,41,52,0.1) !important;
-  box-shadow: var(--eds-shadow-card) !important;
+  padding: 1px 5px !important;
+  font-size: 12px !important;
+  border: none !important;
 }
+.prose hr { border-color: var(--eds-divider) !important; margin: 16px 0 !important; }
+
+/* ── 12. DATAFRAME / TABLE ──────────────────────────────────── */
+.table-wrap {
+  border-radius: 3px !important;
+  overflow: hidden !important;
+  border: 1px solid var(--eds-divider) !important;
+  box-shadow: var(--eds-shadow-sm) !important;
+}
+table { width: 100% !important; border-collapse: collapse !important; }
 table th {
-  background: var(--eds-background) !important;
+  background: var(--eds-bg) !important;
   color: var(--eds-foreground) !important;
   font-family: var(--eds-font) !important;
   font-size: 11px !important;
   font-weight: 700 !important;
   text-transform: uppercase !important;
   letter-spacing: 0.07em !important;
-  border-bottom: 2px solid rgba(61,84,106,0.35) !important;
-  padding: 8px 12px !important;
+  border-bottom: 2px solid rgba(61,84,106,0.3) !important;
+  padding: 10px 14px !important;
+  white-space: nowrap !important;
 }
 table td {
-  border-bottom: 1px solid rgba(61,84,106,0.12) !important;
+  border-bottom: 1px solid rgba(61,84,106,0.1) !important;
   color: var(--eds-body) !important;
   font-family: var(--eds-font) !important;
   font-size: 13px !important;
-  padding: 7px 12px !important;
+  padding: 9px 14px !important;
+  vertical-align: middle !important;
 }
-table tr:hover td {
-  background: var(--eds-primary-accent) !important;
-}
+table tr:last-child td { border-bottom: none !important; }
+table tbody tr:hover td { background: var(--eds-primary-accent) !important; cursor: pointer !important; }
 
-/* ── CHATBOT MESSAGES ──────────────────────────────────────── */
-.message.user    { background: var(--eds-primary-accent) !important; }
-.message.bot     { background: var(--eds-surface) !important; border: 1px solid rgba(30,41,52,0.1) !important; }
-.message         { border-radius: 3px !important; color: var(--eds-body) !important; }
-.message-content { color: var(--eds-body) !important; font-family: var(--eds-font) !important; }
+/* ── 13. CHATBOT ─────────────────────────────────────────────── */
+.bubble-wrap, .chatbot          { background: var(--eds-bg) !important; }
+.message                        { border-radius: 3px !important; font-family: var(--eds-font) !important; }
+.message.user                   { background: var(--eds-primary-accent) !important; color: var(--eds-body) !important; }
+.message.bot, .message.assistant { background: var(--eds-surface) !important; border: 1px solid var(--eds-divider) !important; color: var(--eds-body) !important; }
+.message-content                 { color: var(--eds-body) !important; font-size: 14px !important; line-height: 1.6 !important; }
 
-/* ── FILE UPLOAD ───────────────────────────────────────────── */
-.upload-container, .file-preview-holder {
-  border: 1.5px dashed rgba(61,84,106,0.4) !important;
-  border-radius: 3px !important;
-  background: var(--eds-background) !important;
-}
+/* ── 14. ANALYTICS TAB SPACING ──────────────────────────────── */
+/* Give analytics section breathing room */
+.tabitem .block.gr-group + .block.gr-group { margin-top: 16px !important; }
 
-/* ── SCROLLBAR ─────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: var(--eds-background); }
+/* ── 15. SCROLLBAR ──────────────────────────────────────────── */
+::-webkit-scrollbar       { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--eds-bg); }
 ::-webkit-scrollbar-thumb { background: var(--eds-muted); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--eds-subhead); }
 """
@@ -1037,7 +1152,8 @@ def build_ui() -> gr.Blocks:
 
         gr.Markdown(
             "# AI-Readiness Dashboard\n"
-            "**Auditor · LangGraph · Reflexion · HITL · RAG · Mem0**"
+            "Auditor · LangGraph · Reflexion · HITL · RAG · Mem0",
+            elem_id="app-header",
         )
 
         # ── Shared state (accessible from all tabs) ───────────────────────────
@@ -1051,7 +1167,7 @@ def build_ui() -> gr.Blocks:
             # ═══════════════════════════════════════════════════════════════════
             with gr.Tab("🔍 Scan"):
 
-                with gr.Row():
+                with gr.Row(elem_id="primary-action-row"):
                     folder_input = gr.Textbox(
                         value=DEFAULT_FOLDER,
                         label="Folder path",
@@ -1064,6 +1180,7 @@ def build_ui() -> gr.Blocks:
                     label="Or drag & drop your own files (PDF, DOCX, XLSX, PPTX, CSV, TXT, MD)",
                     file_count="multiple",
                     file_types=[".pdf", ".docx", ".xlsx", ".pptx", ".csv", ".txt", ".md", ".json"],
+                    elem_id="scan-upload",
                 )
 
                 extrapolate_cb = gr.Checkbox(
@@ -1072,16 +1189,15 @@ def build_ui() -> gr.Blocks:
                     value=False,
                 )
 
-                gr.Markdown("---")
+                # Hero + stat cards + charts — all inside one elevated results group
+                with gr.Group(elem_id="scan-results"):
+                    hero_html  = gr.HTML(value="")
+                    stats_html = gr.HTML(value="")
 
-                # Hero + stat cards
-                hero_html  = gr.HTML(value="")
-                stats_html = gr.HTML(value="")
-
-                # Charts
-                with gr.Row():
-                    reasons_plot  = gr.Plot(label="Top reasons for flagging")
-                    doc_type_plot = gr.Plot(label="By document type")
+                    # Charts
+                    with gr.Row():
+                        reasons_plot  = gr.Plot(label="Top reasons for flagging")
+                        doc_type_plot = gr.Plot(label="By document type")
 
             # ═══════════════════════════════════════════════════════════════════
             # TAB 2 — DOCUMENTS
