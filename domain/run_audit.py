@@ -32,10 +32,13 @@ def audit_repository(folder: str, verbose: bool = False) -> dict:
         print(f"[1/3] Crawling {folder!r} …", flush=True)
     crawl = crawl_repository(folder)
     files = crawl["files"]
+    unreadable = crawl.get("unreadable_files", [])
 
     if not files:
         print("No files found.", file=sys.stderr)
-        return aggregate_findings([])
+        result = aggregate_findings([])
+        result["unreadable_files"] = unreadable
+        return result
 
     if verbose:
         print(
@@ -104,6 +107,8 @@ def audit_repository(folder: str, verbose: bool = False) -> dict:
     dashboard = aggregate_findings(document_results)
     # Attach raw per-document list so UIs can drill in without re-running the pipeline
     dashboard["documents"] = document_results
+    # Unreadable / cloud-only / locked files (for UI warning display)
+    dashboard["unreadable_files"] = unreadable
     return dashboard
 
 

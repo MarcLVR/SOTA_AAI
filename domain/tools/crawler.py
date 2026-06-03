@@ -30,15 +30,43 @@ SUPPORTED_EXTENSIONS: set[str] = {
     ".csv", ".json", ".txt", ".md",
 }
 
+# ── Junk-file filters (SharePoint / OneDrive artifacts) ──────────────────────
+
 _SKIP_DIRS: set[str] = {
     ".git", ".venv", "__pycache__", "node_modules", ".mypy_cache",
     ".pytest_cache", ".tox", "dist", "build", ".eggs",
+    # OneDrive internals — never contain real documents
+    "OneDriveTemp", "OneDriveCloudTemp",
 }
 
+# Exact filenames to skip (lowercased for comparison)
+_SKIP_FILES: frozenset[str] = frozenset({
+    "desktop.ini", "thumbs.db", "thumbs.db:encryptable",
+    "ehthumbs.db", "ehthumbs_vista.db", ".ds_store",
+})
 
-def crawl_repository(folder_path: str) -> dict:
-    """Walk a folder recursively and inventory every file with its metadata."""
+# Filename prefixes that indicate temp / lock files
+_JUNK_PREFIXES: tuple[str, ...] = ("~$", "~")
+
+# Filename suffixes that indicate temp / incomplete files (lowercased)
+_JUNK_SUFFIXES: tuple[str, ...] = (".tmp", ".crdownload", ".part", ".lock", ".lnk")
+
+
+def crawl_repository(folder_path: str, max_files: int | None = None) -> dict:
+    """Walk a folder recursively and inventory every file with its metadata.
+
+    Skips SharePoint/OneDrive junk files (desktop.ini, ~$ lock files, .tmp, etc.).
+    Unreadable or cloud-only placeholder files are collected separately instead of
+    silently dropped, so the caller can report them.
+
+    Args:
+        folder_path: Root directory to crawl.
+        max_files:   If set, stop cataloguing supported files once this many are
+                     found (unsupported + unreadable files still counted for the
+                     headline). None means no limit.
+    """
     files: list[dict] = []
+    unreadable_files: list[dict] = []
     total_bytes = 0
     by_extension: dict[str, int] = {}
     supported_files = 0
@@ -52,17 +80,48 @@ def crawl_repository(folder_path: str) -> dict:
         ]
 
         for filename in filenames:
+            name_lower = filename.lower()
+
+            # ── Skip hidden files ─────────────────────────────────────────────
             if filename.startswith("."):
                 continue
 
-            full_path = os.path.join(root, filename)
-            try:
-                stat = os.stat(full_path)
-            except OSError:
+            # ── Skip SharePoint/OneDrive junk ─────────────────────────────────
+            if name_lower in _SKIP_FILES:
+                continue
+            if any(filename.startswith(p) for p in _JUNK_PREFIXES):
+                continue  # Office lock files (~$document.docx)
+            if any(name_lower.endswith(s) for s in _JUNK_SUFFIXES):
                 continue
 
+            full_path = os.path.join(root, filename)
             ext = Path(filename).suffix.lower()
+
+            # ── Handle unreadable / locked / cloud-only files ─────────────────
+            try:
+                stat = os.stat(full_path)
+            except OSError as exc:
+                unreadable_files.append({
+                    "path":  full_path,
+                    "name":  filename,
+                    "error": f"Could not stat: {exc}",
+                })
+                continue
+
             size = stat.st_size
+
+            # Zero-byte supported files are almost always OneDrive cloud-only
+            # placeholders ("Files On-Demand" not yet downloaded).
+            if size == 0 and ext in SUPPORTED_EXTENSIONS:
+                unreadable_files.append({
+                    "path":  full_path,
+                    "name":  filename,
+                    "error": (
+                        "Zero-byte file — may be an OneDrive cloud-only placeholder "
+                        "(file not downloaded). Open it in Windows to sync it first."
+                    ),
+                })
+                continue
 
             record = FileRecord(
                 path=full_path,
@@ -81,16 +140,21 @@ def crawl_repository(folder_path: str) -> dict:
 
             if ext in SUPPORTED_EXTENSIONS:
                 supported_files += 1
+                if max_files and supported_files >= max_files:
+                    # Soft cap reached — stop adding but finish this directory
+                    break
             else:
                 unsupported_files += 1
 
     return {
-        "files": files,
-        "total_files": len(files),
-        "total_bytes": total_bytes,
-        "by_extension": by_extension,
-        "supported_files": supported_files,
+        "files":             files,
+        "total_files":       len(files),
+        "total_bytes":       total_bytes,
+        "by_extension":      by_extension,
+        "supported_files":   supported_files,
         "unsupported_files": unsupported_files,
+        "unreadable_files":  unreadable_files,
+        "unreadable_count":  len(unreadable_files),
     }
 
 

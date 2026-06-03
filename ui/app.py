@@ -52,6 +52,96 @@ _hitl_pending: dict[str, dict] = {}
 
 DEFAULT_FOLDER = "domain/demo_corpus/files"
 EXTRAPOLATION_FACTOR = 30_000
+LARGE_FOLDER_WARN = 2000   # warn (but don't block) when a folder exceeds this many files
+
+
+def _detect_cloud_folders() -> list[tuple[str, str]]:
+    """
+    Auto-detect synced OneDrive / SharePoint folders under /mnt/c/Users/ (WSL2).
+    Returns a list of (display_label, folder_path) tuples, capped at 8 entries.
+    Safe to call at import time — returns [] if the Windows FS is not mounted.
+    """
+    from pathlib import Path as _P
+    found: list[tuple[str, str]] = []
+    users_root = _P("/mnt/c/Users")
+    if not users_root.exists():
+        return found
+
+    _SYSTEM_USERS = {"Default", "Default User", "Public", "All Users",
+                     "TEMP", "desktop.ini"}
+
+    try:
+        user_dirs = sorted(users_root.iterdir())
+    except PermissionError:
+        return found
+
+    for user_dir in user_dirs:
+        if not user_dir.is_dir() or user_dir.name in _SYSTEM_USERS:
+            continue
+        if user_dir.name.startswith("."):
+            continue
+
+        # ── OneDrive folders (personal + work tenants) ────────────────────────
+        try:
+            onedrive_candidates = sorted(user_dir.glob("OneDrive*"))
+        except PermissionError:
+            continue
+        for p in onedrive_candidates:
+            if not p.is_dir():
+                continue
+            name_l = p.name.lower()
+            if "temp" in name_l or "cloud" in name_l:
+                continue  # skip OneDriveTemp / OneDriveCloudTemp
+            label = p.name if p.name != "OneDrive" else "OneDrive (Personal)"
+            found.append((f"☁  {label}", str(p)))
+
+        # ── SharePoint synced libraries ───────────────────────────────────────
+        # Pattern: ~/Company/SiteName - Library  (Company dir directly under user home)
+        # We only include dirs where a child matches the "SiteName - Library" naming.
+        _WINDOWS_PROFILE_DIRS = {
+            "AppData", "Documents", "Downloads", "Desktop", "Pictures",
+            "Music", "Videos", "Contacts", "Links", "Favorites", "Searches",
+            "Saved Games", "3D Objects", "Application Data", "Cookies",
+            "Local Settings", "My Documents", "NetHood", "PrintHood",
+            "Recent", "SendTo", "Start Menu", "Templates", "Roaming",
+            "IntelGraphicsProfiles", "genai_flask_app",
+        }
+        try:
+            company_dirs = sorted(user_dir.iterdir())
+        except PermissionError:
+            continue
+        for company_dir in company_dirs:
+            if not company_dir.is_dir():
+                continue
+            cn = company_dir.name
+            if cn.startswith(".") or cn in _SYSTEM_USERS or cn in _WINDOWS_PROFILE_DIRS:
+                continue
+            if cn.startswith("OneDrive"):
+                continue  # already handled above
+            # Only consider dirs that contain at least one "SiteName - Library" subdir
+            # — that's the SharePoint sync naming convention
+            try:
+                sp_libs = [
+                    d for d in company_dir.iterdir()
+                    if d.is_dir() and " - " in d.name
+                ]
+            except PermissionError:
+                continue
+            for lib_dir in sorted(sp_libs):
+                found.append((f"🏢  {lib_dir.name}", str(lib_dir)))
+
+    # Deduplicate by path, preserve order, cap at 8
+    seen: set[str] = set()
+    deduped: list[tuple[str, str]] = []
+    for lbl, pth in found:
+        if pth not in seen:
+            seen.add(pth)
+            deduped.append((lbl, pth))
+    return deduped[:8]
+
+
+# Detect at import time — fast, no FS writes
+_CLOUD_FOLDERS: list[tuple[str, str]] = _detect_cloud_folders()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -135,7 +225,32 @@ def _stats_html(result: dict, extrapolate: bool) -> str:
         f'{lbl}</div></div>'
         for icon, val, lbl in cards
     )
-    return f'<div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">{inner}</div>'
+    cards_html = f'<div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">{inner}</div>'
+
+    # Unreadable / cloud-only / locked files warning
+    unreadable = result.get("unreadable_files", [])
+    if unreadable:
+        examples = ", ".join(f"`{u['name']}`" for u in unreadable[:3])
+        more = f" +{len(unreadable)-3} more" if len(unreadable) > 3 else ""
+        cards_html += (
+            f'<div style="margin:8px 0;padding:10px 14px;background:#fef3c7;'
+            f'border:1px solid #fcd34d;border-radius:8px;font-size:13px;color:#92400e;">'
+            f'⚠️ <strong>{len(unreadable)} file(s) could not be read</strong> '
+            f'(cloud-only placeholders or locked): {examples}{more}. '
+            f'Open them in Windows to sync before auditing.'
+            f'</div>'
+        )
+
+    # Large-folder warning
+    large_warn = result.get("_large_folder_warning")
+    if large_warn:
+        cards_html += (
+            f'<div style="margin:8px 0;padding:10px 14px;background:#dbeafe;'
+            f'border:1px solid #93c5fd;border-radius:8px;font-size:13px;color:#1e40af;">'
+            f'{large_warn}</div>'
+        )
+
+    return cards_html
 
 
 def _reasons_fig(result: dict):
@@ -299,6 +414,11 @@ def _get_file_path(f) -> str:
 def run_audit_ui(folder: str, uploaded_files, extrapolate: bool):
     """
     Tab 1 'Run Audit' handler.
+
+    COST GUARANTEE: this function calls audit_repository() — a 100% deterministic
+    Python pipeline with ZERO LLM calls, regardless of folder size.  The agent /
+    semantic layer is never invoked here and must never be added to this path.
+
     Returns: (audit_state, docs_state, hero, stats, reasons_fig, doc_type_fig,
               table_rows, detail_md)
     """
@@ -317,6 +437,14 @@ def run_audit_ui(folder: str, uploaded_files, extrapolate: bool):
         result      = audit_and_persist(target)
         documents   = result.get("documents", [])
         docs_sorted = sorted(documents, key=lambda d: d.get("trust_score", 1.0))
+
+        # File-count guard — warn when real large folders are scanned
+        total_docs = result.get("headline", {}).get("total_documents", 0)
+        if total_docs >= LARGE_FOLDER_WARN:
+            result["_large_folder_warning"] = (
+                f"⚠️ Large folder: {total_docs:,} files scanned. "
+                f"Results above are complete — no files were skipped."
+            )
 
         return (
             result,
@@ -744,6 +872,18 @@ def build_ui() -> gr.Blocks:
                     )
                     run_btn = gr.Button("▶  Run Audit", variant="primary", scale=1, min_width=140)
 
+                # ── Synced SharePoint / OneDrive quick-select ─────────────────
+                if _CLOUD_FOLDERS:
+                    cloud_dd = gr.Dropdown(
+                        choices=[(lbl, pth) for lbl, pth in _CLOUD_FOLDERS],
+                        value=None,
+                        label="☁  Scan a synced SharePoint / OneDrive folder "
+                              "(auto-detected)",
+                        interactive=True,
+                    )
+                else:
+                    cloud_dd = None
+
                 file_upload_scan = gr.File(
                     label="Or drag & drop your own files (PDF, DOCX, XLSX, PPTX, CSV, TXT, MD)",
                     file_count="multiple",
@@ -900,6 +1040,14 @@ def build_ui() -> gr.Blocks:
                 doc_table, detail_md,
             ],
         )
+
+        # Tab 1 — cloud folder dropdown → populate folder input
+        if cloud_dd is not None:
+            cloud_dd.change(
+                lambda v: v if v else gr.update(),
+                inputs=[cloud_dd],
+                outputs=[folder_input],
+            )
 
         # Tab 1 — live audit-target indicator
         file_upload_scan.change(
