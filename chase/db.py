@@ -59,17 +59,29 @@ def create_run(document: str, owner: str, findings: list[dict],
     return run_id
 
 
+# validation_runs accepts all 6 statuses; findings only allows these 3.
+# pending_fix / partial_fix are run-level signals — findings stay pending
+# until update_finding_status() resolves them individually.
+_FINDINGS_STATUS_MAP = {
+    "fixed":   "fixed",
+    "manual":  "manual",
+    "ignored": "ignored",
+}
+
+
 def update_run_status(run_id: int, status: str) -> None:
-    """Update status on validation_run and all its findings."""
+    """Update status on validation_run and, where applicable, on its findings."""
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE validation_runs SET status=%s, finished_at=NOW() WHERE id=%s",
             (status, run_id),
         )
-        cur.execute(
-            "UPDATE findings SET status=%s WHERE run_id=%s",
-            (status, run_id),
-        )
+        findings_status = _FINDINGS_STATUS_MAP.get(status)
+        if findings_status:
+            cur.execute(
+                "UPDATE findings SET status=%s WHERE run_id=%s",
+                (findings_status, run_id),
+            )
         conn.commit()
 
 
