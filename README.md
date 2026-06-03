@@ -220,17 +220,21 @@ Pattern: ROLE_PROVIDER_<ROLE>=<provider>
 |---|---|---|
 | **AI-readiness audit pipeline** | Pure Python, no LLM | Runs instantly on thousands of docs; survives API quota exhaustion |
 | **Scanned PDF detection** | Empty-text guard in `check_standards` | Image-only PDFs are flagged for manual review instead of passing clean |
+| **Metadata consistency check** | Deterministic regex, zero LLM | Flags stale author fields, never-revised docs, body-date vs metadata skew |
 | **Extraction timeout** | `concurrent.futures`, 10 s | Corrupt or encrypted files fail fast; never hang the pipeline |
+| **Semantic compliance layer** | ChromaDB + Claude Haiku (on demand) | Compares a document against company standards; one LLM call per click, `SEMANTIC_ENABLED=true` |
 | **Multi-agent orchestration** | LangGraph supervisor pattern | Clean separation of concerns; each agent only does one thing well |
-| **Reflexion self-critique** | Critic node with `CriticDecision` | Responses are iteratively improved before reaching the user |
+| **Reflexion self-critique** | Critic node, off by default (`CRITIC_ENABLED`) | Optional — enables iterative improvement; off saves one LLM call per answer |
+| **Per-role token caps** | `max_tokens` set per role | supervisor=512, auditor=1500, general=2000 — prevents 64k output billing |
 | **Human-in-the-loop** | LangGraph `interrupt()` | Pause any response for review; resume from checkpoint without re-running |
 | **4-tab Gradio dashboard** | Gradio 6.x + Soft theme | Scan · Documents · Ask the agent · Analytics (DB-optional) |
-| **Analytics dashboard** | Postgres + Plotly | KPI cards, severity/status/owner charts; disabled by default, zero DB calls when off |
-| **Company standards library** | `standards/*.md` | 6 markdown docs mapped to domain knowledge rules; Researcher cites them in answers |
+| **Analytics dashboard** | Postgres + Plotly + ROI hero | KPI cards, severity/status/owner charts, savings estimate; disabled by default |
+| **Company standards library** | `standards/*.md` | 9 markdown docs; Researcher cites them; semantic layer compares docs against them |
+| **Owner routing** | Author metadata → team owner | Findings routed to the real owner extracted from document metadata |
 | **Episodic memory** | Mem0 + local embeddings | Remembers facts across sessions without any cloud dependency |
 | **RAG** | ChromaDB + sentence-transformers | CPU-only, no API key, no data leaves the machine |
 | **Input guardrails** | Regex + heuristics | Blocks prompt injection and redacts PII before the LLM sees it |
-| **Full observability** | Langfuse + ConsoleTracer | Every agent decision, tool call, and score is traceable |
+| **Full observability** | Langfuse + ConsoleTracer | Every agent decision, tool call, token count, and score is traceable |
 | **Sandboxed code execution** | subprocess + timeout | Coder agent runs Python safely with matplotlib support |
 | **Multi-provider LLM** | Anthropic · Groq · Ollama | Per-role overrides; no single vendor dependency |
 | **Conversation persistence** | SQLite checkpointer | Resume any conversation across restarts |
@@ -502,8 +506,21 @@ Valid roles: `supervisor` `researcher` `coder` `general` `auditor` `critic` `exe
 |---|---|---|
 | `MAX_SUPERVISOR_ROUNDS` | `5` | Hard cap on routing loops per turn |
 | `TEMPERATURE` | `0.0` | Deterministic outputs — reliable structured JSON |
-| `CRITIC_REVISION_THRESHOLD` | `0.70` | Score below this triggers a revision pass |
+| `CRITIC_ENABLED` | `false` | Set `true` to enable the Reflexion self-critique loop. Off by default — saves one LLM call per answer. |
+| `CRITIC_REVISION_THRESHOLD` | `0.70` | Score below this triggers a revision pass (only when `CRITIC_ENABLED=true`) |
 | `CRITIC_MAX_REVISIONS` | `2` | Maximum revision rounds per turn |
+
+### LLM output token caps
+
+Per-role `max_tokens` caps prevent the model-default of 64 000 from being billed on every call. Override via `ROLE_MAX_TOKENS_<ROLE>=N`.
+
+| Role | Default cap | Rationale |
+|---|---|---|
+| `supervisor` | 512 | Routing JSON only |
+| `critic` | 512 | Score + one-sentence critique |
+| `auditor` | 1 500 | Audit summary |
+| `semantic` | 1 000 | 3 compliance verdicts |
+| `general` / `researcher` / `coder` | 2 000 | Chat responses |
 
 ### Observability
 
@@ -513,6 +530,12 @@ Valid roles: `supervisor` `researcher` `coder` `general` `auditor` `critic` `exe
 | `LANGFUSE_SECRET_KEY` | Required with public key |
 | `LANGFUSE_HOST` | Default: `https://cloud.langfuse.com` |
 | `LANGCHAIN_API_KEY` | Activates LangSmith tracing when set |
+
+### Semantic compliance
+
+| Variable | Default | Notes |
+|---|---|---|
+| `SEMANTIC_ENABLED` | `false` | Set `true` to enable the "Check against company standards" button in the Documents tab. Requires ChromaDB loaded with standards (`python -m scripts.load_standards`). |
 
 ### Analytics & database
 
@@ -666,15 +689,18 @@ a response with cited sources.
 
 ### Act 4 — Show the Reflexion loop ⏱ 1 min
 
-This sometimes happens naturally during Act 3. If you see a `🔁` in the trace
-panel, point it out:
+> The critic is **off by default** (`CRITIC_ENABLED=false`) to keep demos fast.
+> Enable it for this act by setting `CRITIC_ENABLED=true` in `.env` and restarting.
+
+With the critic enabled, every specialist answer is scored before reaching the user.
+If you see a `🔁` in the trace panel:
 
 **What to say:** *"See the 🔁? The critic scored the first response below 0.70 —
 not good enough. It sent the agent back with specific feedback. The agent tried
-again. This is why the answers are higher quality than a basic chatbot."*
+again. This is why the answers are higher quality than a basic chatbot — and it's
+only one extra Groq call (fast, near-zero cost)."*
 
-If it didn't happen naturally, you can trigger it by asking a deliberately
-open-ended question:
+Trigger it with a deliberately vague question:
 ```
 Summarise everything
 ```
@@ -705,8 +731,11 @@ feedback, the agent revises and comes back."*
 | Blank page at localhost:7860 | Wait 20 seconds — the first startup is slow while the embedding model loads |
 | "Error: ANTHROPIC_API_KEY not set" | Check `.env` has the key; run `source .venv/bin/activate` first |
 | Audit returns 0 documents | Run `python -m domain.demo_corpus.generate_sample` first |
+| Charts stuck on "processing" | This was a `gr.Plot + None` bug — fixed in current version. Run `git pull` |
 | Agent gives no response | Check the terminal for error messages; most common cause is a missing API key |
+| Semantic button returns nothing | Run a folder scan first, then click the button — it needs `docs_state` to be populated |
 | "Multiple system messages" error | Ensure you're on the latest commit: `git pull && python main.py` |
+| Reflexion loop not showing | Critic is off by default. Set `CRITIC_ENABLED=true` in `.env` and restart |
 
 ---
 
@@ -756,10 +785,28 @@ chase-format adapter output (rule_code, severity, title, location, suggestion).
 | Signal | Weight | What it measures |
 |---|---|---|
 | Staleness | 40% | Age vs type-specific review cadence; cold access; overdue review dates in body |
-| Standards | 35% | Required headings; standard file format; retired standard references |
+| Standards | 35% | Required headings; standard file format; retired standard references; empty-text detection |
 | Governance | 25% | Owner field; classification label; retention date; review date |
 
 Documents below **0.70** are flagged. Adjust in `domain/knowledge.py`.
+
+### Metadata consistency check (bonus signal, zero LLM)
+
+`domain/tools/metadata_consistency.py` runs deterministically alongside the three main signals. It detects:
+- **Author placeholder** — missing, blank, or generic (e.g. `"Administrator"`)
+- **Never revised** — `CreationDate == ModDate` and age ≥ 90 days
+- **Body-date skew** — a date in the document body differs from `CreationDate`/`ModDate` by more than 5 days
+- **Version string** — extracts version numbers for display (informational)
+
+### Semantic compliance layer (on-demand, one LLM call)
+
+When `SEMANTIC_ENABLED=true`, the Documents tab shows a **"Check against company standards"** button. Clicking it:
+1. Embeds the selected document's text locally (sentence-transformers, free)
+2. Retrieves the top-3 closest standards from ChromaDB
+3. Makes **one Claude Haiku call** (~$0.001) returning a JSON compliance verdict
+4. Displays: standard matched, compliance (`compliant` / `partial` / `violation`), detail, severity
+
+Load the standards first: `python -m scripts.load_standards`
 
 ---
 
@@ -947,6 +994,15 @@ layer), DAVE flags it with "No text extracted — manual review required" and fo
 its trust score below 0.70. If it still passes, the PDF does have a text layer —
 use `python -m domain.inspect_doc file.pdf` to confirm what text was extracted.
 
+**Semantic button returns no results** — Either `SEMANTIC_ENABLED=false` (default),
+ChromaDB is empty, or no scan has been run yet. Steps:
+1. Run a Scan Folder first (populates `docs_state`)
+2. Set `SEMANTIC_ENABLED=true` in `.env` and restart
+3. Load the standards: `python -m scripts.load_standards`
+
+**Chat seems to return without the Reflexion trace** — The critic is off by default
+(`CRITIC_ENABLED=false`). Set `CRITIC_ENABLED=true` to re-enable the scoring loop.
+
 ---
 
 ## Key design decisions
@@ -983,13 +1039,18 @@ For production, swap to `langgraph-checkpoint-postgres` by changing one line in
 ## Roadmap
 
 - [x] Docker image (`Dockerfile` + `.dockerignore`)
-- [x] Telegram notifier daemon (auto-starts with app)
+- [x] Telegram notifier daemon (auto-starts with app; gated on `DB_ENABLED`)
 - [x] Single-document inspection CLI (`domain/inspect_doc.py`)
 - [x] Analytics tab with Postgres backend (opt-in via `DB_ENABLED`)
 - [x] Scanned PDF / empty-text detection
 - [x] Per-file extraction timeout (prevents hangs on corrupt files)
+- [x] Semantic compliance layer (`domain/semantic.py`, `SEMANTIC_ENABLED`)
+- [x] Metadata consistency check (author, never-revised, body-date skew)
+- [x] Critic optional + off by default (`CRITIC_ENABLED=false`)
+- [x] Per-role LLM output token caps (32× cost reduction vs 64k default)
+- [x] UI freeze fix: `gr.Plot + None` root cause eliminated
+- [x] Owner routing: findings routed to real owners via document author metadata
 - [ ] Docker Compose: one-command start with Postgres + app
-- [ ] SharePoint / OneDrive connector for real-corpus audits
 - [ ] PDF report generation from audit results
 - [ ] LangGraph Studio visual debugger integration
 - [ ] Browser agent via Playwright MCP server
