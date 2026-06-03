@@ -36,11 +36,11 @@ for human review before you feed it to a RAG pipeline.
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                                                                             │
 │   GRADIO UI  (http://localhost:7860)                                        │
-│   ┌──────────────┐  ┌──────────────────┐  ┌─────────────────────────────┐  │
-│   │  🔍 Scan     │  │  📋 Documents    │  │  🤖 Ask the agent           │  │
-│   │  Quota-safe  │  │  Drill-in table  │  │  Full multi-agent chat      │  │
-│   │  No LLM      │  │  Row → findings  │  │  with trace panel           │  │
-│   └──────┬───────┘  └────────┬─────────┘  └──────────────┬──────────────┘  │
+│   ┌──────────────┐  ┌──────────────────┐  ┌──────────────────┐  ┌────────┐  │
+│   │  🔍 Scan     │  │  📋 Documents    │  │  🤖 Ask the agent│  │📊 Ana- │  │
+│   │  Quota-safe  │  │  Drill-in table  │  │  Full multi-agent│  │lytics  │  │
+│   │  No LLM      │  │  Row → findings  │  │  with trace panel│  │(DB opt)│  │
+│   └──────┬───────┘  └────────┬─────────┘  └──────────────┬───┘  └───┬────┘  │
 │          │                   │                            │                 │
 └──────────┼───────────────────┼────────────────────────────┼─────────────────┘
            │                   │                            │
@@ -111,6 +111,8 @@ waiting. You can scan thousands of documents in seconds.
 2. extract_document(path)
       Read the file content and embedded metadata (author, title, created date)
       using python-docx, openpyxl, python-pptx, pypdf, or plain text parsers.
+      Runs in a worker thread with a 10-second timeout — corrupt or encrypted
+      files fail fast instead of hanging the pipeline.
 
 3. score_staleness(doc_type, modified_at, accessed_at, text)
       Compare the document's age to the type-specific review cadence defined in
@@ -122,6 +124,9 @@ waiting. You can scan thousands of documents in seconds.
       Check that required headings (e.g. "Owner", "Scope") are present.
       Scan for references to retired standards (ISO/IEC 27001:2013,
       "proposed AI Act", deprecated regulation names).
+      Guard: if a PDF/DOCX/PPTX yields no extractable text, the document is
+      flagged as "may be a scanned image or have a text-rendering issue" — it
+      cannot be content-audited and always requires manual review.
 
 5. check_governance(doc_type, metadata, text)
       Look for owner field, classification label, retention date, and review date
@@ -214,10 +219,14 @@ Pattern: ROLE_PROVIDER_<ROLE>=<provider>
 | Feature | Technology | Why it matters |
 |---|---|---|
 | **AI-readiness audit pipeline** | Pure Python, no LLM | Runs instantly on thousands of docs; survives API quota exhaustion |
+| **Scanned PDF detection** | Empty-text guard in `check_standards` | Image-only PDFs are flagged for manual review instead of passing clean |
+| **Extraction timeout** | `concurrent.futures`, 10 s | Corrupt or encrypted files fail fast; never hang the pipeline |
 | **Multi-agent orchestration** | LangGraph supervisor pattern | Clean separation of concerns; each agent only does one thing well |
 | **Reflexion self-critique** | Critic node with `CriticDecision` | Responses are iteratively improved before reaching the user |
 | **Human-in-the-loop** | LangGraph `interrupt()` | Pause any response for review; resume from checkpoint without re-running |
-| **3-tab Gradio dashboard** | Gradio 6.x | Tab 1: quota-safe scan; Tab 2: document drill-in; Tab 3: chat |
+| **4-tab Gradio dashboard** | Gradio 6.x + Soft theme | Scan · Documents · Ask the agent · Analytics (DB-optional) |
+| **Analytics dashboard** | Postgres + Plotly | KPI cards, severity/status/owner charts; disabled by default, zero DB calls when off |
+| **Company standards library** | `standards/*.md` | 6 markdown docs mapped to domain knowledge rules; Researcher cites them in answers |
 | **Episodic memory** | Mem0 + local embeddings | Remembers facts across sessions without any cloud dependency |
 | **RAG** | ChromaDB + sentence-transformers | CPU-only, no API key, no data leaves the machine |
 | **Input guardrails** | Regex + heuristics | Blocks prompt injection and redacts PII before the LLM sees it |
@@ -225,6 +234,7 @@ Pattern: ROLE_PROVIDER_<ROLE>=<provider>
 | **Sandboxed code execution** | subprocess + timeout | Coder agent runs Python safely with matplotlib support |
 | **Multi-provider LLM** | Anthropic · Groq · Ollama | Per-role overrides; no single vendor dependency |
 | **Conversation persistence** | SQLite checkpointer | Resume any conversation across restarts |
+| **Docker** | `python:3.11-slim` + uv | Single `docker build` → `docker run`; no host Python needed |
 
 ---
 
@@ -435,6 +445,25 @@ python -m domain.demo_corpus.generate_sample
 python main.py
 ```
 
+### Option D — Docker
+
+No Python installation required on the host.
+
+```bash
+git clone https://github.com/OAPMaaS/dave.git
+cd dave
+cp .env.example .env
+# Edit .env — set ANTHROPIC_API_KEY and GROQ_API_KEY
+
+docker build -t dave .
+docker run -p 7860:7860 --env-file .env dave
+```
+
+Open [http://localhost:7860](http://localhost:7860).
+
+> The image uses `python:3.11-slim` + `uv` for fast dependency installation.
+> Secrets are excluded from the image via `.dockerignore`.
+
 ---
 
 ## Environment variables reference
@@ -485,6 +514,23 @@ Valid roles: `supervisor` `researcher` `coder` `general` `auditor` `critic` `exe
 | `LANGFUSE_HOST` | Default: `https://cloud.langfuse.com` |
 | `LANGCHAIN_API_KEY` | Activates LangSmith tracing when set |
 
+### Analytics & database
+
+| Variable | Default | Notes |
+|---|---|---|
+| `DB_ENABLED` | `false` | Set `true` to activate the Analytics tab and Postgres writes. When `false`, the tab shows a "not connected" card and makes zero DB calls — safe for laptop demos. |
+| `DB_HOST` | `localhost` | PostgreSQL host (`postgres` only resolves inside Docker) |
+| `DB_PORT` | `5432` | PostgreSQL port |
+| `DB_NAME` | `dave` | Database name |
+| `DB_USER` | `dave` | Database user |
+| `DB_PASSWORD` | — | Database password |
+
+### Deployment
+
+| Variable | Default | Notes |
+|---|---|---|
+| `GRADIO_ROOT_PATH` | `` (empty) | Set to a subpath (e.g. `/dave`) when running behind a reverse proxy |
+
 ---
 
 ## Demo guide
@@ -504,7 +550,7 @@ ls domain/demo_corpus/files/ | wc -l
 # 2. Start the app and confirm it loads
 source .venv/bin/activate
 python main.py
-# Open http://localhost:7860 — you should see all 3 tabs
+# Open http://localhost:7860 — you should see all 4 tabs
 
 # 3. Run a quick smoke test
 python main.py --query "Hello"
@@ -537,6 +583,13 @@ in seconds — no AI, no API calls, no quotas. Just fast Python."*
 4. Check the **Extrapolate toggle** — watch the numbers multiply by 30,000
 5. **What to say:** *"This sample has 42 documents. If your full SharePoint has
    30,000 documents and the same pattern holds, this is what you're dealing with."*
+
+**Live file upload demo (optional):**
+Drag a PDF from your desktop onto the upload zone. The label below updates to
+`📄 Will audit 1 uploaded file(s): your-file.pdf`. Click **Run Audit** — DAVE
+audits only that file. A scanned / image-only PDF will be flagged with:
+*"No text extracted — document may be a scanned image or have a text-rendering
+issue. Content cannot be automatically audited; manual review required."*
 
 ---
 
@@ -675,6 +728,25 @@ python -m domain.run_audit /path/to/your/documents --top 20
 python -m domain.demo_corpus.generate_sample
 ```
 
+### Single-document inspector
+
+Inspect one file in full detail — useful for judging finding quality before a demo:
+
+```bash
+# Full terminal report (text preview, all findings, adapter output)
+python -m domain.inspect_doc path/to/document.docx
+
+# Skip the extracted-text section
+python -m domain.inspect_doc path/to/document.docx --no-text
+
+# Machine-readable — pipe to jq
+python -m domain.inspect_doc path/to/document.pdf --json | jq '.findings'
+```
+
+The report shows: document metadata, extraction status, the three sub-scores with
+visual bars, every finding from staleness / standards / governance, and the full
+chase-format adapter output (rule_code, severity, title, location, suggestion).
+
 > **Synthetic data:** All documents in `domain/demo_corpus/` and `test_docs/` are
 > entirely synthetic, generated by `domain/demo_corpus/generate_sample.py` and
 > `scripts/generate_synthetic.py`. They contain no real personal data.
@@ -691,10 +763,10 @@ Documents below **0.70** are flagged. Adjust in `domain/knowledge.py`.
 
 ---
 
-## DAVE notification pipeline (standalone modules)
+## DAVE notification pipeline
 
-These modules exist in the repo and can be run independently. They are not yet
-wired into the main LangGraph graph.
+The Telegram notification pipeline is active when `TELEGRAM_BOT_TOKEN` is set.
+`main.py` auto-starts both the bot and the notifier daemon on launch.
 
 ### `chase/` — Telegram notification layer
 
@@ -702,13 +774,16 @@ When a finding is detected, `notifier.py` sends the document owner a Telegram
 message with four inline buttons: **Fix** (triggers the executor ReAct loop),
 **Manual** (marks for human action), **Ignore**, and **Info** (shows full findings).
 
+The notifier daemon (`start_notifier_daemon()`) polls the database for unflagged
+runs and sends notifications automatically — no manual trigger needed.
+
 ```bash
-# Run the bot (requires TELEGRAM_BOT_TOKEN in .env)
+# Run the bot standalone (useful for testing)
 python chase/telegram_bot.py
 ```
 
 Required env vars: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_<NAME>_CHAT_ID` for each owner,
-`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`.
+`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_ENABLED=true`.
 
 Additional install: `pip install python-telegram-bot psycopg2-binary`
 
@@ -740,6 +815,8 @@ dave/
 ├── main.py                      # entry point — UI / CLI / single query
 ├── requirements.txt
 ├── .env.example                 # copy to .env and fill in your keys
+├── Dockerfile                   # python:3.11-slim + uv; EXPOSE 7860
+├── .dockerignore
 │
 ├── config/
 │   └── settings.py              # all env vars → pydantic Settings object
@@ -768,16 +845,26 @@ dave/
 ├── domain/                      # AI-readiness audit engine (zero LLM calls)
 │   ├── knowledge.py             # review cadences, retired standards, required sections
 │   ├── run_audit.py             # CLI + programmatic API
+│   ├── inspect_doc.py           # single-document inspection CLI (--no-text, --json)
+│   ├── adapter.py               # audit output → chase/notifier+db format
 │   ├── tools/
 │   │   ├── crawler.py           # os.walk + stat inventory
-│   │   ├── extractor.py         # text + metadata extraction
+│   │   ├── extractor.py         # text + metadata extraction (10s timeout)
 │   │   ├── staleness.py         # age / cold / overdue scoring
-│   │   ├── standards.py         # section compliance + retired-ref detection
+│   │   ├── standards.py         # section compliance, retired-ref, empty-text guard
 │   │   ├── governance.py        # owner / classification / retention checks
 │   │   └── aggregate.py         # trust_score + corpus dashboard
 │   └── demo_corpus/
 │       ├── generate_sample.py   # generates 42-file synthetic corpus
 │       └── files/               # generated documents (gitignored after generation)
+│
+├── standards/                   # Company RAG standards (6 markdown docs)
+│   ├── document_lifecycle.md
+│   ├── governance_and_pii.md
+│   ├── naming_and_structure.md
+│   ├── required_sections.md
+│   ├── retired_standards.md
+│   └── trust_scoring.md
 │
 ├── memory/
 │   ├── vector_store.py          # ChromaDB + HuggingFace embeddings
@@ -794,14 +881,15 @@ dave/
 │   └── rag_eval.py              # RAGAS metrics
 │
 ├── ui/
-│   └── app.py                   # Gradio 6.x — 3-tab dashboard
+│   └── app.py                   # Gradio 6.x — 4-tab dashboard (Soft theme)
 │
-├── chase/                       # [standalone] Telegram notifier + PostgreSQL
-│   ├── telegram_bot.py
-│   ├── notifier.py
-│   └── db.py
+├── chase/                       # Telegram notifier + PostgreSQL (auto-starts with app)
+│   ├── telegram_bot.py          # polling bot; auto-started by main.py
+│   ├── notifier.py              # notifier daemon; auto-started by main.py
+│   ├── db.py                    # psycopg2 CRUD; connect_timeout=3
+│   └── schema.sql               # PostgreSQL DDL
 │
-├── scripts/                     # [standalone] utilities
+├── scripts/                     # utilities
 │   ├── generate_synthetic.py
 │   ├── test_pipeline.py
 │   └── export_results.py
@@ -850,6 +938,15 @@ pkill -f main.py
 for Groq's free tier. Start a new session by clicking **🔄 New session**, or increase
 your Groq plan. This does not affect the auditor (which uses Anthropic).
 
+**Analytics tab shows "not connected"** — Expected when `DB_ENABLED=false` (the
+default). Set `DB_ENABLED=true` and configure `DB_HOST`/`DB_NAME`/`DB_USER`/
+`DB_PASSWORD` in `.env` to activate it. The tab makes zero DB calls when disabled.
+
+**Scanned PDF passes clean / shows 0 findings** — If a PDF is image-only (no text
+layer), DAVE flags it with "No text extracted — manual review required" and forces
+its trust score below 0.70. If it still passes, the PDF does have a text layer —
+use `python -m domain.inspect_doc file.pdf` to confirm what text was extracted.
+
 ---
 
 ## Key design decisions
@@ -885,10 +982,15 @@ For production, swap to `langgraph-checkpoint-postgres` by changing one line in
 
 ## Roadmap
 
-- [ ] Wire `chase/` Telegram pipeline into the main LangGraph graph
+- [x] Docker image (`Dockerfile` + `.dockerignore`)
+- [x] Telegram notifier daemon (auto-starts with app)
+- [x] Single-document inspection CLI (`domain/inspect_doc.py`)
+- [x] Analytics tab with Postgres backend (opt-in via `DB_ENABLED`)
+- [x] Scanned PDF / empty-text detection
+- [x] Per-file extraction timeout (prevents hangs on corrupt files)
+- [ ] Docker Compose: one-command start with Postgres + app
 - [ ] SharePoint / OneDrive connector for real-corpus audits
 - [ ] PDF report generation from audit results
-- [ ] Docker Compose: one command to start everything
 - [ ] LangGraph Studio visual debugger integration
 - [ ] Browser agent via Playwright MCP server
 - [ ] Streaming token-by-token output from specialist agents
