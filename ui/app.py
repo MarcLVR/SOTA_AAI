@@ -20,7 +20,7 @@ from langchain_core.messages import AIMessage, ToolMessage, HumanMessage
 from loguru import logger
 
 from config import settings
-from domain.run_audit import audit_repository
+from domain.adapter import audit_and_persist
 from domain.tools.aggregate import human_bytes
 from graph.workflow import build_graph, run_query, resume_after_hitl
 from memory import ingest_documents, get_all_memories
@@ -314,7 +314,7 @@ def run_audit_ui(folder: str, uploaded_files, extrapolate: bool):
         else:
             target = (folder or DEFAULT_FOLDER).strip()
 
-        result      = audit_repository(target)
+        result      = audit_and_persist(target)
         documents   = result.get("documents", [])
         docs_sorted = sorted(documents, key=lambda d: d.get("trust_score", 1.0))
 

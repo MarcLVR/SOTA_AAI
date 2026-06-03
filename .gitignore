@@ -9,3 +9,4 @@ data/
 domain.zip
 *.zip
 *_cache.json
+docker-compose.yml

@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "chase"))
 
-from db import get_run, update_run_status
+from db import get_run, update_run_status, update_finding_status
 
 log = logging.getLogger("dave-executor")
 
@@ -81,7 +81,12 @@ def execute_fix(run_id: int) -> dict:
     document = run.get("doc_name") or run.get("document", "unknown")
     results = []
 
-    for finding in run["findings"]:
+    pending_findings = [f for f in run["findings"] if f.get("status") == "pending"]
+    if not pending_findings:
+        update_run_status(run_id, "fixed")
+        return {"run_id": run_id, "document": document, "success": True, "results": []}
+
+    for finding in pending_findings:
         finding_label = finding.get("rule_code") or finding.get("title", "finding")
         finding_fix   = finding.get("proposed_fix") or finding.get("suggestion", "")
 
@@ -102,6 +107,10 @@ def execute_fix(run_id: int) -> dict:
             if step.get("done"):
                 success = True
                 break
+
+        if success and finding.get("id"):
+            resolution = steps[-1].get("observation", "") if steps else ""
+            update_finding_status(finding["id"], "fixed", resolution=resolution)
 
         results.append({
             "finding":  finding_label,
