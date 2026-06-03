@@ -670,6 +670,104 @@ def new_session() -> str:
 # Tab 4 — Analytics helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── ROI model constants (client: OmniAccess SharePoint) ───────────────────────
+_ROI_OFFICE_TB        = 4.0      # office SharePoint (TB)
+_ROI_GROUP_TB         = 40.0     # group SharePoint (TB)
+_ROI_DOCS_PER_TB      = 7_500    # enterprise SharePoint average (mixed Office files)
+_ROI_WORKER_EUR_HR    = 40.0     # loaded EU knowledge-worker cost €/h
+_ROI_AUDIT_MIN_DOC    = 3.0      # minutes to manually audit one document
+_ROI_AUDITS_PER_YEAR  = 2        # compliance review cycles per year
+_ROI_RAG_IN_INDEX     = 0.50     # fraction of flagged docs that land in RAG index
+_ROI_RAG_Q_PER_DOC    = 4        # RAG queries/year that touch a flagged doc
+_ROI_MISLEAD_RATE     = 0.25     # fraction of those queries that return a wrong answer
+_ROI_FIX_MIN          = 20.0     # minutes to detect and correct one misleading answer
+_ROI_SP_EUR_PER_GB_MO = 0.18     # Microsoft 365 extra storage pricing €/GB/month
+_ROI_FLAG_RATE        = 0.40     # industry benchmark: ~40 % of docs fail compliance
+
+
+def _roi_html(flag_rate: float = _ROI_FLAG_RATE) -> str:
+    """ROI / savings panel — computed entirely from audit statistics, no DB needed."""
+
+    def _calc(tb: float) -> dict:
+        docs       = int(tb * _ROI_DOCS_PER_TB)
+        flagged    = int(docs * flag_rate)
+        gb_flagged = tb * 1_024 * flag_rate
+        storage    = gb_flagged * _ROI_SP_EUR_PER_GB_MO * 12
+        audit_h    = docs * _ROI_AUDIT_MIN_DOC / 60
+        audit      = audit_h * _ROI_WORKER_EUR_HR * _ROI_AUDITS_PER_YEAR
+        misleading = int(flagged * _ROI_RAG_IN_INDEX * _ROI_RAG_Q_PER_DOC * _ROI_MISLEAD_RATE)
+        rag        = misleading * _ROI_FIX_MIN / 60 * _ROI_WORKER_EUR_HR
+        return dict(docs=docs, flagged=flagged, gb_flagged=gb_flagged,
+                    storage=storage, audit_h=audit_h, audit=audit,
+                    misleading=misleading, rag=rag, total=storage + audit + rag)
+
+    def _fmt(v: float) -> str:
+        if v >= 1_000_000: return f"€{v/1_000_000:.1f}M"
+        if v >= 1_000:     return f"€{v/1_000:.0f}K"
+        return f"€{v:.0f}"
+
+    def _panel(label: str, tb: float, d: dict) -> str:
+        return (
+            '<div style="flex:1;min-width:280px;background:#fff;border:1px solid #e5e7eb;'
+            'border-radius:12px;padding:20px;">'
+
+            f'<div style="font-size:13px;font-weight:700;color:#6b7280;text-transform:uppercase;'
+            f'letter-spacing:.08em;margin-bottom:5px;">{label} · {tb:.0f} TB SharePoint</div>'
+            f'<div style="font-size:11px;color:#9ca3af;margin-bottom:14px;">'
+            f'~{d["docs"]:,} documents &nbsp;·&nbsp; {flag_rate*100:.0f}% flagged'
+            f' &nbsp;·&nbsp; {d["gb_flagged"]:,.0f} GB at risk</div>'
+
+            '<div style="background:#fef3c7;border-radius:8px;padding:12px;margin-bottom:8px;">'
+            '<div style="font-size:11px;color:#92400e;font-weight:600;margin-bottom:2px;">'
+            '🗄️ WASTED SHAREPOINT STORAGE</div>'
+            f'<div style="font-size:24px;font-weight:700;color:#b45309;">{_fmt(d["storage"])}'
+            '<span style="font-size:13px;font-weight:400;">/yr</span></div>'
+            f'<div style="font-size:11px;color:#78350f;">'
+            f'{d["gb_flagged"]:,.0f} GB stale content · €0.18/GB/month (Microsoft 365)</div></div>'
+
+            '<div style="background:#ede9fe;border-radius:8px;padding:12px;margin-bottom:8px;">'
+            '<div style="font-size:11px;color:#5b21b6;font-weight:600;margin-bottom:2px;">'
+            '⏱️ COMPLIANCE AUDIT LABOR REPLACED</div>'
+            f'<div style="font-size:24px;font-weight:700;color:#6d28d9;">{_fmt(d["audit"])}'
+            '<span style="font-size:13px;font-weight:400;">/yr</span></div>'
+            f'<div style="font-size:11px;color:#4c1d95;">'
+            f'{d["audit_h"]:,.0f} h/audit · {_ROI_AUDITS_PER_YEAR}× per year · DAVE replaces in seconds</div></div>'
+
+            '<div style="background:#dcfce7;border-radius:8px;padding:12px;margin-bottom:14px;">'
+            '<div style="font-size:11px;color:#166534;font-weight:600;margin-bottom:2px;">'
+            '🤖 RAG MISLEADING ANSWERS AVOIDED</div>'
+            f'<div style="font-size:24px;font-weight:700;color:#15803d;">{_fmt(d["rag"])}'
+            '<span style="font-size:13px;font-weight:400;">/yr</span></div>'
+            f'<div style="font-size:11px;color:#14532d;">'
+            f'{d["misleading"]:,} wrong AI answers avoided · {_ROI_FIX_MIN:.0f} min correction each</div></div>'
+
+            '<div style="padding:14px;background:linear-gradient(135deg,#1e293b,#0f172a);'
+            'border-radius:10px;text-align:center;">'
+            '<div style="font-size:11px;color:#94a3b8;font-weight:600;letter-spacing:.06em;margin-bottom:4px;">'
+            'TOTAL ANNUAL IMPACT</div>'
+            f'<div style="font-size:34px;font-weight:800;color:#f8fafc;">{_fmt(d["total"])}</div></div>'
+            '</div>'
+        )
+
+    o = _calc(_ROI_OFFICE_TB)
+    g = _calc(_ROI_GROUP_TB)
+    assumptions = (
+        f"{_ROI_DOCS_PER_TB:,} docs/TB · {flag_rate*100:.0f}% flag rate (Gartner industry avg) · "
+        f"€{_ROI_WORKER_EUR_HR:.0f}/h loaded cost · {_ROI_AUDIT_MIN_DOC:.0f} min manual audit/doc · "
+        f"{_ROI_AUDITS_PER_YEAR} cycles/yr · {int(_ROI_RAG_IN_INDEX*100)}% of flagged docs indexed in RAG"
+    )
+    return (
+        '<div style="margin:16px 0 8px;">'
+        '<div style="font-size:17px;font-weight:700;color:#111827;margin-bottom:2px;">'
+        '💶 Value at Stake — What DAVE saves</div>'
+        '<div style="font-size:13px;color:#6b7280;margin-bottom:16px;">'
+        'Cost of unmanaged document entropy across your SharePoint repositories</div>'
+        f'<div style="display:flex;gap:16px;flex-wrap:wrap;">{_panel("Office", _ROI_OFFICE_TB, o)}{_panel("Group", _ROI_GROUP_TB, g)}</div>'
+        f'<div style="margin-top:10px;font-size:11px;color:#9ca3af;font-style:italic;">📐 {assumptions}</div>'
+        '</div>'
+    )
+
+
 def _analytics_kpi_html(s: dict) -> str:
     fix_color = "#16a34a" if s["fix_rate"] >= 70 else ("#d97706" if s["fix_rate"] >= 40 else "#dc2626")
     cards = [
@@ -704,7 +802,7 @@ def _severity_fig(rows: list[dict]):
     fig.update_layout(
         title="Findings by severity", height=300,
         margin=dict(l=20, r=20, t=50, b=20),
-        paper_bgcolor="white", showlegend=False,
+        paper_bgcolor="rgba(0,0,0,0)", showlegend=False,
     )
     return fig
 
@@ -725,7 +823,7 @@ def _status_fig(rows: list[dict]):
     fig.update_layout(
         title="Findings by status", height=300,
         margin=dict(l=40, r=20, t=50, b=50),
-        plot_bgcolor="white", paper_bgcolor="white",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         yaxis=dict(showgrid=True, gridcolor="#f3f4f6"),
     )
     return fig
@@ -744,7 +842,7 @@ def _rules_fig(rows: list[dict]):
     fig.update_layout(
         title="Top violation types", height=360,
         margin=dict(l=200, r=60, t=50, b=40),
-        plot_bgcolor="white", paper_bgcolor="white",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         font=dict(size=12),
     )
     return fig
@@ -764,7 +862,7 @@ def _owners_fig(rows: list[dict]):
         barmode="group", title="Findings by owner",
         height=300, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=40, r=20, t=60, b=50),
-        plot_bgcolor="white", paper_bgcolor="white",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
     )
     return fig
 
@@ -778,15 +876,132 @@ def _timeline_fig(rows: list[dict]):
         x=days, y=runs, mode="lines+markers",
         line=dict(color="#6366f1", width=2),
         marker=dict(size=6),
-        fill="tozeroy", fillcolor="rgba(99,102,241,0.1)",
+        fill="tozeroy", fillcolor="rgba(99,102,241,0.15)",
     ))
     fig.update_layout(
         title="Validation runs over time", height=250,
         margin=dict(l=40, r=20, t=50, b=50),
-        plot_bgcolor="white", paper_bgcolor="white",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor="#f3f4f6"),
     )
     return fig
+
+
+def _savings_html(s: dict) -> str:
+    """Hero dashboard card — white design, JS countup animation on every render."""
+    if not s or s.get("total_runs", 0) == 0:
+        return (
+            '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:16px;'
+            'padding:32px;text-align:center;">'
+            '<div style="font-size:32px;margin-bottom:8px;">📊</div>'
+            '<div style="font-size:15px;font-weight:600;color:#374151;margin-bottom:4px;">DAVE Impact Dashboard</div>'
+            '<div style="font-size:13px;color:#9ca3af;">Run a scan to populate live metrics</div>'
+            '</div>'
+        )
+
+    runs     = s["total_runs"]
+    findings = s["total_findings"]
+    fixed    = s.get("fixed",   0)
+    manual   = s.get("manual",  0)
+    ignored  = s.get("ignored", 0)
+    resolved = fixed + manual + ignored
+    fix_rate = float(s.get("fix_rate", 0))
+
+    audit_h   = runs  * _ROI_AUDIT_MIN_DOC / 60
+    audit_eur = audit_h * _ROI_WORKER_EUR_HR
+    fix_h     = fixed * _ROI_FIX_MIN / 60
+    fix_eur   = fix_h * _ROI_WORKER_EUR_HR
+    total_eur = audit_eur + fix_eur
+    total_min = (audit_h + fix_h) * 60        # total minutes for animation
+    rag_saved = int(findings * _ROI_RAG_IN_INDEX * _ROI_RAG_Q_PER_DOC * _ROI_MISLEAD_RATE)
+
+    fix_color = "#16a34a" if fix_rate >= 70 else ("#d97706" if fix_rate >= 40 else "#dc2626")
+
+    # Static formatted labels (shown in sublabels, not animated)
+    def _fe(v: float) -> str:
+        if v >= 1_000_000: return f"€{v/1_000_000:.1f}M"
+        if v >= 1_000:     return f"€{v/1_000:.1f}K"
+        return f"€{int(v)}"
+
+    def _fmin(m: float) -> str:
+        if m >= 60: return f"{m/60:.1f}h"
+        return f"{int(m)}min"
+
+    return (
+        '<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;'
+        'background:#fff;border:1px solid #e5e7eb;border-radius:16px;'
+        'padding:24px 26px;box-shadow:0 1px 4px rgba(0,0,0,.06);">'
+
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">'
+        '<div>'
+        '<div style="font-size:17px;font-weight:700;color:#111827;letter-spacing:-.01em;">📊 DAVE Impact Dashboard</div>'
+        '<div style="font-size:11px;color:#9ca3af;margin-top:3px;">Cumulative · updates every 8 s</div>'
+        '</div>'
+        '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:20px;'
+        'padding:5px 14px;font-size:11px;color:#16a34a;font-weight:600;">🟢 LIVE</div>'
+        '</div>'
+
+        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px;">'
+
+        '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:18px 16px;">'
+        '<div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">💶 Labor Cost Saved</div>'
+        f'<div data-dave data-val="{round(total_eur)}" data-fmt="eur" '
+        f'style="font-size:40px;font-weight:800;color:#16a34a;line-height:1;letter-spacing:-.02em;">{_fe(total_eur)}</div>'
+        f'<div style="font-size:11px;color:#9ca3af;margin-top:6px;">audit {_fe(audit_eur)} · auto-fix {_fe(fix_eur)}</div>'
+        '</div>'
+
+        '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:18px 16px;">'
+        '<div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">⏱️ Time Saved</div>'
+        f'<div data-dave data-val="{round(total_min)}" data-fmt="min" '
+        f'style="font-size:40px;font-weight:800;color:#2563eb;line-height:1;letter-spacing:-.02em;">{_fmin(total_min)}</div>'
+        f'<div style="font-size:11px;color:#9ca3af;margin-top:6px;">vs. {_fmin(audit_h*60)} manual audit + {_fmin(fix_h*60)} fix</div>'
+        '</div>'
+
+        '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:18px 16px;">'
+        '<div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px;">🤖 RAG Errors Avoided</div>'
+        f'<div data-dave data-val="{rag_saved}" data-fmt="int" '
+        f'style="font-size:40px;font-weight:800;color:#7c3aed;line-height:1;letter-spacing:-.02em;">{rag_saved}</div>'
+        '<div style="font-size:11px;color:#9ca3af;margin-top:6px;">misleading AI answers prevented</div>'
+        '</div>'
+
+        '</div>'
+
+        '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">'
+
+        '<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:14px;text-align:center;">'
+        f'<div data-dave data-val="{runs}" data-fmt="int" style="font-size:26px;font-weight:700;color:#111827;">{runs}</div>'
+        '<div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;margin-top:3px;">Docs audited</div>'
+        '</div>'
+
+        '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px;text-align:center;">'
+        f'<div data-dave data-val="{findings}" data-fmt="int" style="font-size:26px;font-weight:700;color:#d97706;">{findings}</div>'
+        '<div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;margin-top:3px;">Issues found</div>'
+        '</div>'
+
+        '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px;text-align:center;">'
+        f'<div data-dave data-val="{resolved}" data-fmt="int" style="font-size:26px;font-weight:700;color:#16a34a;">{resolved}</div>'
+        '<div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;margin-top:3px;">Resolved</div>'
+        '</div>'
+
+        '<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;padding:14px;text-align:center;">'
+        f'<div data-dave data-val="{fix_rate}" data-fmt="pct" style="font-size:26px;font-weight:700;color:{fix_color};">{fix_rate:.1f}%</div>'
+        '<div style="font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;margin-top:3px;">Fix rate</div>'
+        '</div>'
+
+        '</div>'
+        '</div>'
+    )
+
+
+def run_savings_only() -> str:
+    """Lightweight function for the gr.Timer — only refreshes the hero card."""
+    if not settings.db_enabled:
+        return ""
+    try:
+        get_stats = _chase_db()[0]
+        return _savings_html(get_stats())
+    except Exception:
+        return ""
 
 
 _ANALYTICS_DISABLED_HTML = (
@@ -808,7 +1023,7 @@ def run_analytics_ui():
 
     # Guard 1: analytics disabled via env flag — return immediately, no network call
     if not settings.db_enabled:
-        return (_ANALYTICS_DISABLED_HTML, *_empty, "")
+        return ("", *_empty, "")
 
     # Guard 2: DB reachable but query failed — show error, never hang
     try:
@@ -823,7 +1038,7 @@ def run_analytics_ui():
         timeline = get_timeline()
 
         return (
-            _analytics_kpi_html(stats),
+            _savings_html(stats),
             _severity_fig(sev),
             _status_fig(statuses),
             _rules_fig(rules),
@@ -833,12 +1048,7 @@ def run_analytics_ui():
         )
     except Exception as exc:
         logger.warning(f"Analytics DB error: {exc}")
-        err_html = (
-            f'<div style="padding:16px;background:#fef2f2;border:1px solid #fecaca;'
-            f'border-radius:8px;color:#991b1b;font-size:13px;">'
-            f'⚠️ <strong>Database unreachable</strong><br>{exc}</div>'
-        )
-        return (err_html, *_empty, f"🔴 {exc}")
+        return ("", *_empty, f"🔴 {exc}")
 
 
 CHAT_EXAMPLES = [
@@ -853,8 +1063,31 @@ CHAT_EXAMPLES = [
 TABLE_HEADERS = ["Name", "Type", "Size", "Modified", "Trust", "Supervision?", "Top reason"]
 
 
+_DAVE_ANIMATE_JS = """
+function daveAnimate() {
+  var D = 1400;
+  function ease(t) { return 1 - Math.pow(1 - t, 3); }
+  document.querySelectorAll('[data-dave]').forEach(function(el) {
+    var target = parseFloat(el.getAttribute('data-val') || '0');
+    var fmt    = el.getAttribute('data-fmt') || 'int';
+    function fv(v) {
+      if (fmt === 'eur') { v = Math.round(v); return v >= 1000 ? '€' + (v/1000).toFixed(1) + 'K' : '€' + v; }
+      if (fmt === 'min') { v = Math.round(v); return v >= 60 ? (v/60).toFixed(1) + 'h' : v + 'min'; }
+      if (fmt === 'pct') return v.toFixed(1) + '%';
+      return '' + Math.round(v);
+    }
+    var t0 = performance.now();
+    (function tick(now) {
+      var p = Math.min((now - t0) / D, 1);
+      el.textContent = fv(target * ease(p));
+      if (p < 1) requestAnimationFrame(tick);
+    })(t0);
+  });
+}
+"""
+
 def build_ui() -> gr.Blocks:
-    with gr.Blocks(title="AI-Readiness Dashboard") as demo:
+    with gr.Blocks(title="AI-Readiness Dashboard", js=_DAVE_ANIMATE_JS) as demo:
 
         gr.Markdown(
             "# AI-Readiness Dashboard\n"
@@ -1052,11 +1285,13 @@ def build_ui() -> gr.Blocks:
             # ═══════════════════════════════════════════════════════════════════
             with gr.Tab("📊 Analytics") as analytics_tab:
 
+                analytics_timer = gr.Timer(value=8)
+
                 with gr.Row():
-                    analytics_refresh_btn = gr.Button("🔄 Refresh", variant="primary", scale=1, min_width=120)
+                    analytics_refresh_btn = gr.Button("🔄 Refresh all", variant="primary", scale=0, min_width=140)
                     analytics_status      = gr.Markdown(value="")
 
-                analytics_kpi = gr.HTML(value="")
+                analytics_savings = gr.HTML(value="")
 
                 with gr.Row():
                     analytics_severity_plot = gr.Plot(label="")
@@ -1158,14 +1393,16 @@ def build_ui() -> gr.Blocks:
 
         # Tab 4 — Analytics
         _analytics_outputs = [
-            analytics_kpi,
+            analytics_savings,
             analytics_severity_plot, analytics_status_plot,
             analytics_rules_plot,    analytics_owners_plot,
             analytics_timeline_plot,
             analytics_status,
         ]
-        analytics_refresh_btn.click(run_analytics_ui, outputs=_analytics_outputs)
-        analytics_tab.select(run_analytics_ui,         outputs=_analytics_outputs)
+        _animate_js = "() => { if(typeof daveAnimate==='function') daveAnimate(); }"
+        analytics_refresh_btn.click(run_analytics_ui, outputs=_analytics_outputs).then(fn=None, js=_animate_js)
+        analytics_tab.select(run_analytics_ui,         outputs=_analytics_outputs).then(fn=None, js=_animate_js)
+        analytics_timer.tick(run_savings_only,          outputs=[analytics_savings])
 
         # Queue is required so slow/blocking handlers (analytics DB, chat streaming)
         # run in worker threads and cannot freeze the Gradio event loop.

@@ -264,7 +264,7 @@ def audit_repository_to_findings(folder: str) -> dict[str, list[dict]]:
 
 # ── Scan + persist (drop-in replacement for audit_repository) ────────────────
 
-def audit_and_persist(folder: str, default_owner: str = "demo_user") -> dict:
+def audit_and_persist(folder: str, default_owner: str = "nacho") -> dict:
     """
     Run audit_repository(folder), persist flagged findings to PostgreSQL, and
     return the same result dict — drop-in replacement for audit_repository().
@@ -272,11 +272,14 @@ def audit_and_persist(folder: str, default_owner: str = "demo_user") -> dict:
     Callers (e.g. ui/app.py) only need to swap the function name; the return
     value is identical so all downstream UI code keeps working unchanged.
 
-    default_owner: platform_username assigned to findings whose owner cannot
-    be inferred from the folder structure (used for demo / fallback).
+    default_owner: escalation/admin owner ('nacho') assigned to findings whose
+    owner cannot be inferred from the document's author metadata — e.g. orphan
+    documents and formats with no author metadata (.txt/.csv/.json). Routes
+    "ownerless" documents to a real inbox instead of dropping them silently.
     DB errors are caught and logged so a DB outage never breaks the UI scan.
     """
     from domain.run_audit import audit_repository
+    from domain.pipeline import _resolve_owner   # author-metadata → team owner
 
     result = audit_repository(folder)
 
@@ -292,10 +295,13 @@ def audit_and_persist(folder: str, default_owner: str = "demo_user") -> dict:
         findings = audit_doc_to_findings(doc)
         if not findings:
             continue
+        # Resolve the real owner from the document's author metadata; fall back
+        # to default_owner only when the author is unknown / unmapped.
+        owner = _resolve_owner(doc, default_owner)
         try:
             create_run(
                 document=doc.get("name", "unknown"),
-                owner=default_owner,
+                owner=owner,
                 findings=findings,
                 doc_type=doc.get("doc_type", "unknown"),
                 doc_path=doc.get("path", ""),

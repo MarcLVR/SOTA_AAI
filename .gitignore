@@ -10,3 +10,4 @@ domain.zip
 *.zip
 *_cache.json
 docker-compose.yml
+docker-entrypoint.sh
