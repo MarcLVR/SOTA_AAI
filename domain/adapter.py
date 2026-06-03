@@ -252,7 +252,7 @@ def audit_repository_to_findings(folder: str) -> dict[str, list[dict]]:
 
 # ── Scan + persist (drop-in replacement for audit_repository) ────────────────
 
-def audit_and_persist(folder: str, default_owner: str = "augusto") -> dict:
+def audit_and_persist(folder: str, default_owner: str = "demo_user") -> dict:
     """
     Run audit_repository(folder), persist flagged findings to PostgreSQL, and
     return the same result dict — drop-in replacement for audit_repository().

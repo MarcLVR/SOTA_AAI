@@ -106,6 +106,17 @@ def mark_notified(run_id: int) -> None:
         conn.commit()
 
 
+def mark_owner_notified(run_id: int, owner_username: str) -> None:
+    """Set notified_at only on pending findings belonging to a specific owner."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE findings SET notified_at=NOW()
+               WHERE run_id=%s AND owner_username=%s AND status='pending'""",
+            (run_id, owner_username),
+        )
+        conn.commit()
+
+
 def get_run(run_id: int) -> dict | None:
     """Return a run with its findings, or None."""
     with _conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:

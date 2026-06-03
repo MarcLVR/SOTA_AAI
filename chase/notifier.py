@@ -107,7 +107,7 @@ def _poll_once() -> None:
     _chase = _os.path.dirname(_os.path.abspath(__file__))
     if _chase not in _sys.path:
         _sys.path.insert(0, _chase)
-    from db import get_unnotified_pending_runs, mark_notified
+    from db import get_unnotified_pending_runs, mark_owner_notified
 
     runs = get_unnotified_pending_runs()
     for run in runs:
@@ -124,14 +124,10 @@ def _poll_once() -> None:
                 "severity":   f.get("severity", "medium"),
             })
 
-        notified_any = False
         for owner, owner_findings in by_owner.items():
             if send_finding(owner, doc_name, owner_findings, run_id=run_id):
-                notified_any = True
+                mark_owner_notified(run_id, owner)
                 print(f"[notifier] ✉️  {owner} ← {doc_name!r} (run #{run_id})")
-
-        if notified_any:
-            mark_notified(run_id)
 
 
 def start_notifier_daemon(interval: int = 30) -> None:
