@@ -639,8 +639,28 @@ def _timeline_fig(rows: list[dict]):
     return fig
 
 
+_ANALYTICS_DISABLED_HTML = (
+    '<div style="padding:24px;background:#f9fafb;border:1px solid #e5e7eb;'
+    'border-radius:10px;text-align:center;color:#6b7280;">'
+    '<div style="font-size:32px;margin-bottom:8px;">📊</div>'
+    '<div style="font-size:16px;font-weight:600;margin-bottom:6px;">'
+    'Analytics not connected</div>'
+    '<div style="font-size:13px;">Set <code>DB_ENABLED=true</code> and configure '
+    '<code>DB_HOST</code> / <code>DB_NAME</code> / <code>DB_USER</code> / '
+    '<code>DB_PASSWORD</code> in <code>.env</code> to enable the PostgreSQL '
+    'analytics dashboard.</div></div>'
+)
+
+
 def run_analytics_ui():
     """Refresh handler for Tab 4 — queries Postgres and returns all chart data."""
+    _empty = (None, None, None, None, None)
+
+    # Guard 1: analytics disabled via env flag — return immediately, no network call
+    if not settings.db_enabled:
+        return (_ANALYTICS_DISABLED_HTML, *_empty, "")
+
+    # Guard 2: DB reachable but query failed — show error, never hang
     try:
         (get_stats, get_sev, get_status,
          get_rules, get_owners, get_timeline) = _chase_db()
@@ -663,8 +683,12 @@ def run_analytics_ui():
         )
     except Exception as exc:
         logger.warning(f"Analytics DB error: {exc}")
-        err = f"⚠️ Cannot reach database: {exc}"
-        return (err, None, None, None, None, None, f"🔴 {exc}")
+        err_html = (
+            f'<div style="padding:16px;background:#fef2f2;border:1px solid #fecaca;'
+            f'border-radius:8px;color:#991b1b;font-size:13px;">'
+            f'⚠️ <strong>Database unreachable</strong><br>{exc}</div>'
+        )
+        return (err_html, *_empty, f"🔴 {exc}")
 
 
 CHAT_EXAMPLES = [
@@ -924,6 +948,10 @@ def build_ui() -> gr.Blocks:
         ]
         analytics_refresh_btn.click(run_analytics_ui, outputs=_analytics_outputs)
         analytics_tab.select(run_analytics_ui,         outputs=_analytics_outputs)
+
+        # Queue is required so slow/blocking handlers (analytics DB, chat streaming)
+        # run in worker threads and cannot freeze the Gradio event loop.
+        demo.queue()
 
     return demo
 

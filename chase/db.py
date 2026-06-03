@@ -17,11 +17,12 @@ from psycopg2.extras import RealDictCursor
 
 def _conn():
     return psycopg2.connect(
-        host=os.getenv("DB_HOST", "postgres"),
+        host=os.getenv("DB_HOST", "localhost"),   # "postgres" only resolves inside Docker
         port=int(os.getenv("DB_PORT", 5432)),
         dbname=os.getenv("DB_NAME", "dave"),
         user=os.getenv("DB_USER", "dave"),
         password=os.getenv("DB_PASSWORD", ""),
+        connect_timeout=3,                         # fail fast — never hang the UI
     )
 
 

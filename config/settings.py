@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     langfuse_host: str = "https://cloud.langfuse.com"
     langchain_api_key: str | None = None          # LangSmith
 
+    # ── Analytics / PostgreSQL ────────────────────────────────────────────────
+    db_enabled: bool = False   # set True only when Postgres is reachable; protects demo
+
     # ── Guardrails ────────────────────────────────────────────────────────────
     guardrail_max_input_length: int = 8000
     guardrail_redact_pii: bool = True
