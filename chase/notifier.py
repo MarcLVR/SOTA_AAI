@@ -46,7 +46,7 @@ def send_finding(owner: str, document: str, findings: list[dict], run_id: int | 
     # metacharacters (_ * [ ...) that break parse_mode="Markdown" with a 400
     # "can't parse entities". HTML mode only needs < > & escaped.
     esc = html.escape
-    lines = [f"📄 <b>Documento · revisión</b>\n<code>{esc(str(document))}</code>\n"]
+    lines = [f"📄 <b>Document · compliance review</b>\n<code>{esc(str(document))}</code>\n"]
     for f in findings:
         icon = SEVERITY_ICON.get(f.get("severity", "medium"), "🟡")
         lines.append(f"{icon} <b>{esc(str(f.get('title', 'Issue')))}</b>")
@@ -60,12 +60,12 @@ def send_finding(owner: str, document: str, findings: list[dict], run_id: int | 
     keyboard = {
         "inline_keyboard": [
             [
-                {"text": "✅ Que DAVE lo corrija", "callback_data": f"fix:{run_id}"},
-                {"text": "✏️ Lo corrijo yo",        "callback_data": f"manual:{run_id}"},
+                {"text": "✅ Fix with DAVE",    "callback_data": f"fix:{run_id}"},
+                {"text": "✏️ Fix manually",     "callback_data": f"manual:{run_id}"},
             ],
             [
-                {"text": "🚫 Ignorar",              "callback_data": f"ignore:{run_id}"},
-                {"text": "ℹ️ Más información",       "callback_data": f"info:{run_id}"},
+                {"text": "🚫 Ignore",           "callback_data": f"ignore:{run_id}"},
+                {"text": "ℹ️ More details",     "callback_data": f"info:{run_id}"},
             ],
         ]
     }
