@@ -17,10 +17,19 @@ from loguru import logger
 def launch_ui():
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "chase"))
-    from telegram_bot import start_bot_background
-    from notifier import start_notifier_daemon
-    start_bot_background()
-    start_notifier_daemon()
+
+    from config import settings
+
+    # Only start DB-dependent daemons when Postgres is actually configured.
+    # When DB_ENABLED=false these would spam "connection refused" every 30s
+    # and could slow the event loop on each poll attempt.
+    if settings.db_enabled:
+        from telegram_bot import start_bot_background
+        from notifier import start_notifier_daemon
+        start_bot_background()
+        start_notifier_daemon()
+    else:
+        logger.info("DB_ENABLED=false — Telegram bot and notifier daemon not started")
 
     from ui.app import build_ui
     import gradio as gr

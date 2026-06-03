@@ -274,11 +274,21 @@ def audit_and_persist(folder: str, default_owner: str = "demo_user") -> dict:
 
     default_owner: platform_username assigned to findings whose owner cannot
     be inferred from the folder structure (used for demo / fallback).
-    DB errors are caught and logged so a DB outage never breaks the UI scan.
+
+    When DB_ENABLED=false (default), the DB write is skipped entirely — no
+    connection attempts, no timeouts, no UI freeze.
     """
     from domain.run_audit import audit_repository
 
     result = audit_repository(folder)
+
+    # Fast-path: skip ALL DB work when the database is not configured.
+    # Without this guard every flagged document would attempt a TCP connection
+    # (connect_timeout=3s) that blocks the scan handler for up to
+    # N_flagged × 3s — freezing the Gradio "processing" spinner.
+    from config import settings
+    if not settings.db_enabled:
+        return result
 
     import sys as _sys, os as _os
     _chase = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "chase")

@@ -131,7 +131,20 @@ def _poll_once() -> None:
 
 
 def start_notifier_daemon(interval: int = 30) -> None:
-    """Start a background daemon that polls the DB every `interval` seconds."""
+    """Start a background daemon that polls the DB every `interval` seconds.
+
+    No-op when DB_ENABLED is false — avoids connection-refused spam and the
+    3-second blocking TCP timeout on every poll cycle.
+    """
+    import sys as _sys, os as _os
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    if _root not in _sys.path:
+        _sys.path.insert(0, _root)
+    from config import settings
+    if not settings.db_enabled:
+        print("[notifier] DB_ENABLED=false — daemon not started")
+        return
+
     def _loop():
         print(f"[notifier] Daemon started (poll every {interval}s)")
         while True:
