@@ -27,6 +27,34 @@ from loguru import logger
 from config import settings
 
 
+# ── Per-role output-token caps ────────────────────────────────────────────────
+# ChatAnthropic's default is 64 000 (the model maximum) — absurd for our use
+# cases. These caps prevent runaway output costs with no quality loss.
+# Override any single role via ROLE_MAX_TOKENS_<ROLE>=N in .env.
+
+_ROLE_MAX_TOKENS: dict[str, int] = {
+    "supervisor": 512,    # routing decision JSON only
+    "critic":     512,    # score + one-line critique
+    "auditor":    1500,   # audit summary / findings
+    "semantic":   1000,   # compliance analysis (3 findings)
+    "general":    2000,   # chat / reasoning
+    "researcher": 2000,   # research summary
+    "coder":      2000,   # code output
+    "executor":   2000,   # document fix instructions
+}
+_DEFAULT_MAX_TOKENS = 2000  # cap for any role not listed above
+
+
+def _max_tokens_for_role(role: str | None) -> int:
+    """Return the output-token cap for a role, with env-var override support."""
+    if role:
+        env_val = os.environ.get(f"ROLE_MAX_TOKENS_{role.upper()}")
+        if env_val:
+            return int(env_val)
+        return _ROLE_MAX_TOKENS.get(role, _DEFAULT_MAX_TOKENS)
+    return _DEFAULT_MAX_TOKENS
+
+
 def _provider_for_role(role: str | None) -> str:
     """Return the provider to use for a given role, or the default."""
     if role:
@@ -58,8 +86,9 @@ def get_llm(
               is resolved via ROLE_PROVIDER_<ROLE> env var, falling back to
               settings.llm_provider.
     """
-    t = temperature if temperature is not None else settings.temperature
+    t        = temperature if temperature is not None else settings.temperature
     provider = _provider_for_role(role)
+    max_tok  = _max_tokens_for_role(role)
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
@@ -69,10 +98,14 @@ def get_llm(
                 "Provider=anthropic but ANTHROPIC_API_KEY is not set in .env."
             )
         m = model or _model_for_role(role) or settings.anthropic_model
-        logger.info(f"Loading LLM: provider=anthropic model={m} temp={t} role={role}")
+        logger.info(
+            f"Loading LLM: provider=anthropic model={m} "
+            f"max_tokens={max_tok} temp={t} role={role}"
+        )
         return ChatAnthropic(
             model=m,
             temperature=t,
+            max_tokens=max_tok,
             anthropic_api_key=settings.anthropic_api_key,
         )
 
@@ -85,10 +118,14 @@ def get_llm(
                 "Get a free key at https://console.groq.com/keys"
             )
         m = model or _model_for_role(role) or settings.groq_model
-        logger.info(f"Loading LLM: provider=groq model={m} temp={t} role={role}")
+        logger.info(
+            f"Loading LLM: provider=groq model={m} "
+            f"max_tokens={max_tok} temp={t} role={role}"
+        )
         return ChatGroq(
             model=m,
             temperature=t,
+            max_tokens=max_tok,
             groq_api_key=settings.groq_api_key,
         )
 
@@ -96,11 +133,15 @@ def get_llm(
         from langchain_ollama import ChatOllama
 
         m = model or _model_for_role(role) or settings.ollama_model
-        logger.info(f"Loading LLM: provider=ollama model={m} temp={t} role={role}")
+        logger.info(
+            f"Loading LLM: provider=ollama model={m} "
+            f"max_tokens={max_tok} temp={t} role={role}"
+        )
         return ChatOllama(
             base_url=settings.ollama_base_url,
             model=m,
             temperature=t,
+            num_predict=max_tok,   # Ollama uses num_predict instead of max_tokens
         )
 
     # ── Gemini disabled — free tier limited to ~20 req/day, breaks multi-agent runs ──
