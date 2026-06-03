@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     langfuse_host: str = "https://cloud.langfuse.com"
     langchain_api_key: str | None = None          # LangSmith
 
+    # ── Semantic compliance layer ─────────────────────────────────────────────
+    semantic_enabled: bool = False   # set True to enable ChromaDB standards comparison
+
     # ── Analytics / PostgreSQL ────────────────────────────────────────────────
     db_enabled: bool = False   # set True only when Postgres is reachable; protects demo
 

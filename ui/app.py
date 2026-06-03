@@ -21,6 +21,7 @@ from loguru import logger
 
 from config import settings
 from domain.adapter import audit_and_persist
+from domain.semantic import semantic_check
 from domain.tools.aggregate import human_bytes
 from graph.workflow import build_graph, run_query, resume_after_hitl
 from memory import ingest_documents, get_all_memories
@@ -307,6 +308,82 @@ def _doc_detail_md(row_idx: int, docs: list) -> str:
         f"(has owner={g.get('has_owner', '—')}, classified={g.get('classification_valid', '—')})",
     ]
     return "\n".join(lines)
+
+
+# ── Semantic compliance helpers ──────────────────────────────────────────────
+
+def _semantic_result_md(doc_name: str, findings: list[dict]) -> str:
+    """Format semantic_check() findings as Markdown for the result panel."""
+    lines = [f"### 🧠 Semantic compliance — `{doc_name}`", ""]
+    for f in findings:
+        compliance = f.get("compliance", "unknown").lower()
+        severity   = f.get("severity",   "medium").lower()
+        icon   = {"compliant": "✅", "partial": "⚠️", "violation": "❌"}.get(compliance, "❓")
+        badge  = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(severity, "")
+        std    = f.get("standard_matched", "?").removesuffix(".md")
+        detail = f.get("detail", "")
+        lines.append(f"**{icon} {compliance.upper()}** {badge}  `{std}`  ")
+        lines.append(f"> {detail}  ")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def run_semantic_check_ui(docs: list, row_idx: int | None) -> str:
+    """
+    Documents tab — 'Check against company standards' button handler.
+
+    One LLM call, on demand, for the selected document only.
+    Returns Markdown to display in the semantic result panel.
+    """
+    if not settings.semantic_enabled:
+        return (
+            "⚠️ **Semantic analysis is disabled.**  \n"
+            "Set `SEMANTIC_ENABLED=true` in `.env` and restart to enable it."
+        )
+
+    if row_idx is None or not docs:
+        return "_Select a document row first, then click the button._"
+
+    try:
+        row_idx = int(row_idx)
+    except (TypeError, ValueError):
+        return "_Invalid row selection._"
+
+    if row_idx >= len(docs):
+        return "_Row index out of range — re-run the audit and select a row._"
+
+    doc      = docs[row_idx]
+    doc_name = doc.get("name", "?")
+    doc_type = doc.get("doc_type", "unknown")
+    doc_text = doc.get("text", "") or ""
+
+    # Fallback: re-extract if text was not stored in the audit result
+    if not doc_text.strip():
+        path = doc.get("path", "")
+        if path:
+            try:
+                from domain.tools.extractor import extract_document
+                doc_text = extract_document(path).get("text", "") or ""
+            except Exception:
+                pass
+
+    if not doc_text.strip():
+        return f"❌ `{doc_name}` has no extractable text — semantic check cannot run."
+
+    try:
+        findings = semantic_check(doc_text, doc_type=doc_type)
+    except Exception as exc:
+        logger.warning(f"[semantic UI] unexpected error: {exc}")
+        findings = []
+
+    if not findings:
+        return (
+            f"⚠️ **Semantic check unavailable** for `{doc_name}`.  \n"
+            "ChromaDB may be empty or the model could not complete. "
+            "Check logs, or run `python -m scripts.load_standards` first."
+        )
+
+    return _semantic_result_md(doc_name, findings)
 
 
 # ── Audit run & toggle handlers ───────────────────────────────────────────────
@@ -785,8 +862,9 @@ def build_ui() -> gr.Blocks:
         )
 
         # ── Shared state (accessible from all tabs) ───────────────────────────
-        audit_state = gr.State(None)   # full audit result dict
-        docs_state  = gr.State([])     # per-document list sorted by trust_score
+        audit_state       = gr.State(None)   # full audit result dict
+        docs_state        = gr.State([])     # per-document list sorted by trust_score
+        selected_doc_idx  = gr.State(None)   # row index of the selected document (Tab 2)
 
         with gr.Tabs():
 
@@ -877,6 +955,23 @@ def build_ui() -> gr.Blocks:
 
                 gr.Markdown("---\n### Document detail")
                 detail_md = gr.Markdown("_Run an audit in the Scan tab, then select a row._")
+
+                gr.Markdown("---")
+
+                # ── Semantic compliance check (on-demand, one LLM call) ───────
+                _sem_label = (
+                    "🧠 Check against company standards (semantic)"
+                    if settings.semantic_enabled
+                    else "🧠 Semantic analysis disabled (set SEMANTIC_ENABLED=true)"
+                )
+                semantic_btn = gr.Button(
+                    _sem_label,
+                    variant="secondary" if settings.semantic_enabled else "stop",
+                    size="sm",
+                )
+                semantic_md = gr.Markdown(
+                    value="_Select a document row and click the button above to run a semantic compliance check._"
+                )
 
             # ═══════════════════════════════════════════════════════════════════
             # TAB 3 — ASK THE AGENT
@@ -1003,11 +1098,22 @@ def build_ui() -> gr.Blocks:
             outputs=[hero_html, stats_html],
         )
 
-        # Tab 2 — row selection → detail panel
+        # Tab 2 — row selection → detail panel + record selected index
+        def _select_and_track(evt: gr.SelectData, docs: list):
+            row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else int(evt.index)
+            return _doc_detail_md(row_idx, docs), row_idx
+
         doc_table.select(
-            select_doc_row,
+            _select_and_track,
             inputs=[docs_state],
-            outputs=[detail_md],
+            outputs=[detail_md, selected_doc_idx],
+        )
+
+        # Tab 2 — semantic compliance button
+        semantic_btn.click(
+            run_semantic_check_ui,
+            inputs=[docs_state, selected_doc_idx],
+            outputs=[semantic_md],
         )
 
         # Tab 3 — chat
