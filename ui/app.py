@@ -343,6 +343,19 @@ def update_extrapolation(extrapolate: bool, result: dict | None):
     return _hero_html(result, extrapolate), _stats_html(result, extrapolate)
 
 
+def _audit_target_label(files, folder: str) -> str:
+    """Return a markdown string describing what the next Run Audit will scan."""
+    if files:
+        paths = [_get_file_path(f) for f in files]
+        names = [os.path.basename(p) for p in paths if p]
+        display = " · ".join(f"`{n}`" for n in names[:4])
+        if len(names) > 4:
+            display += f" +{len(names) - 4} more"
+        return f"📄 **Will audit {len(names)} uploaded file(s):** {display}"
+    fp = (folder or DEFAULT_FOLDER).strip()
+    return f"📁 **Will audit folder:** `{fp}`"
+
+
 def select_doc_row(evt: gr.SelectData, docs: list) -> str:
     if evt is None or evt.index is None:
         return "_Select a row to see details._"
@@ -737,6 +750,10 @@ def build_ui() -> gr.Blocks:
                     file_types=[".pdf", ".docx", ".xlsx", ".pptx", ".csv", ".txt", ".md", ".json"],
                 )
 
+                audit_target_md = gr.Markdown(
+                    value=f"📁 **Will audit folder:** `{DEFAULT_FOLDER}`",
+                )
+
                 extrapolate_cb = gr.Checkbox(
                     label=f"Extrapolate to full repository (×{EXTRAPOLATION_FACTOR:,}) — scales "
                           f"document count & remediation hours for illustration only",
@@ -882,6 +899,18 @@ def build_ui() -> gr.Blocks:
                 reasons_plot, doc_type_plot,
                 doc_table, detail_md,
             ],
+        )
+
+        # Tab 1 — live audit-target indicator
+        file_upload_scan.change(
+            _audit_target_label,
+            inputs=[file_upload_scan, folder_input],
+            outputs=[audit_target_md],
+        )
+        folder_input.change(
+            _audit_target_label,
+            inputs=[file_upload_scan, folder_input],
+            outputs=[audit_target_md],
         )
 
         # Tab 1 — extrapolation toggle re-renders hero + stats without re-running audit

@@ -20,36 +20,58 @@ class ExtractedDoc:
     error: str | None = None
 
 
-def extract_document(path: str, max_chars: int = 12000) -> dict:
-    """Extract text + embedded metadata from a single document."""
-    ext = Path(path).suffix.lower()
-    try:
-        if ext == ".pdf":
-            result = _extract_pdf(path)
-        elif ext in (".docx", ".doc"):
-            result = _extract_docx(path)
-        elif ext in (".xlsx", ".xls"):
-            result = _extract_xlsx(path)
-        elif ext in (".pptx", ".ppt"):
-            result = _extract_pptx(path)
-        elif ext == ".csv":
-            result = _extract_csv(path)
-        elif ext == ".json":
-            result = _extract_json(path)
-        elif ext in (".txt", ".md"):
-            result = _extract_text(path)
-        else:
+def extract_document(path: str, max_chars: int = 12000, timeout_s: int = 10) -> dict:
+    """Extract text + embedded metadata from a single document.
+
+    Runs the format-specific extraction in a worker thread capped at timeout_s
+    seconds.  This prevents corrupt, encrypted, or pathologically large files
+    from hanging the caller (and, by extension, the Gradio event loop).
+    """
+    import concurrent.futures as _cf
+
+    with _cf.ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(_extract_dispatch, path)
+        try:
+            result = fut.result(timeout=timeout_s)
+        except _cf.TimeoutError:
             result = ExtractedDoc(
                 text="",
                 extraction_ok=False,
-                error=f"Unsupported extension: {ext}",
+                error=f"Extraction timed out after {timeout_s}s "
+                      f"(file may be corrupt, encrypted, or too large)",
             )
-    except Exception as exc:
-        result = ExtractedDoc(text="", extraction_ok=False, error=str(exc))
+        except Exception as exc:
+            result = ExtractedDoc(text="", extraction_ok=False, error=str(exc))
 
-    # Truncate body text after extraction so we don't lose metadata
     result.text = result.text[:max_chars]
     return asdict(result)
+
+
+def _extract_dispatch(path: str) -> ExtractedDoc:
+    """Dispatch to the correct format-specific extractor (runs inside a thread)."""
+    ext = Path(path).suffix.lower()
+    try:
+        if ext == ".pdf":
+            return _extract_pdf(path)
+        if ext in (".docx", ".doc"):
+            return _extract_docx(path)
+        if ext in (".xlsx", ".xls"):
+            return _extract_xlsx(path)
+        if ext in (".pptx", ".ppt"):
+            return _extract_pptx(path)
+        if ext == ".csv":
+            return _extract_csv(path)
+        if ext == ".json":
+            return _extract_json(path)
+        if ext in (".txt", ".md"):
+            return _extract_text(path)
+        return ExtractedDoc(
+            text="",
+            extraction_ok=False,
+            error=f"Unsupported extension: {ext}",
+        )
+    except Exception as exc:
+        return ExtractedDoc(text="", extraction_ok=False, error=str(exc))
 
 
 # ── Per-format helpers ────────────────────────────────────────────────────────
