@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     temperature: float = 0.0
 
     # ── Reflection ────────────────────────────────────────────────────────────
+    critic_enabled: bool = False               # set CRITIC_ENABLED=true to enable Reflexion
     critic_revision_threshold: float = 0.70   # below this score → revise
     critic_max_revisions: int = 2
 

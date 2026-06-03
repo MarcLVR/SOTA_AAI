@@ -1,13 +1,16 @@
 .venv/
 __pycache__/
 *.pyc
+*.pyo
 .env
 data/
 *.sqlite
 *.db
 .DS_Store
-domain.zip
 *.zip
 *_cache.json
+*.log
+.pytest_cache/
+notebooks/
 docker-compose.yml
 docker-entrypoint.sh

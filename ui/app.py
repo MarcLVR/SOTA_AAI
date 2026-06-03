@@ -167,7 +167,7 @@ def _stats_html(result: dict, extrapolate: bool) -> str:
 
 def _reasons_fig(result: dict):
     if not result:
-        return None
+        return go.Figure().update_layout(title="Run a scan to see results")
     reasons = result.get("reasons", {})
     label_map = {
         "stale":               "Stale",
@@ -209,7 +209,7 @@ def _reasons_fig(result: dict):
 
 def _doc_type_fig(result: dict):
     if not result:
-        return None
+        return go.Figure().update_layout(title="Run a scan to see results")
     by_type = result.get("by_doc_type", {})
     if not by_type:
         return go.Figure().update_layout(title="No document-type data")
@@ -335,52 +335,88 @@ def run_semantic_check_ui(docs: list, row_idx: int | None) -> str:
     One LLM call, on demand, for the selected document only.
     Returns Markdown to display in the semantic result panel.
     """
+    # ── STEP 0: gate ──────────────────────────────────────────────────────────
+    logger.info(f"[semantic UI] button clicked — semantic_enabled={settings.semantic_enabled} "
+                f"row_idx={row_idx!r} (type={type(row_idx).__name__}) "
+                f"docs_count={len(docs) if docs else 0}")
+
     if not settings.semantic_enabled:
         return (
             "⚠️ **Semantic analysis is disabled.**  \n"
             "Set `SEMANTIC_ENABLED=true` in `.env` and restart to enable it."
         )
 
-    if row_idx is None or not docs:
-        return "_Select a document row first, then click the button._"
+    # ── STEP 1: validate row selection ────────────────────────────────────────
+    if not docs:
+        logger.warning("[semantic UI] STEP 1 FAIL — docs_state is empty, no scan has been run")
+        return "⚠️ **Run a folder or upload scan first** (Scan tab), then select a row here."
+
+    # If no row was explicitly selected, fall back to the first flagged document
+    if row_idx is None:
+        flagged = [i for i, d in enumerate(docs) if d.get("needs_supervision")]
+        row_idx = flagged[0] if flagged else 0
+        logger.info(f"[semantic UI] STEP 1 — no row selected, falling back to row {row_idx}")
 
     try:
         row_idx = int(row_idx)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.warning(f"[semantic UI] STEP 1 FAIL — cannot cast row_idx {row_idx!r}: {exc}")
         return "_Invalid row selection._"
 
     if row_idx >= len(docs):
+        logger.warning(f"[semantic UI] STEP 1 FAIL — row_idx={row_idx} >= docs_len={len(docs)}")
         return "_Row index out of range — re-run the audit and select a row._"
 
     doc      = docs[row_idx]
     doc_name = doc.get("name", "?")
     doc_type = doc.get("doc_type", "unknown")
+    doc_keys = list(doc.keys())
+    logger.info(f"[semantic UI] STEP 1 OK — doc={doc_name!r} type={doc_type!r} keys={doc_keys}")
+
+    # ── STEP 2: get text ──────────────────────────────────────────────────────
     doc_text = doc.get("text", "") or ""
+    logger.info(f"[semantic UI] STEP 2 — text from doc dict: {len(doc_text)} chars")
 
     # Fallback: re-extract if text was not stored in the audit result
     if not doc_text.strip():
         path = doc.get("path", "")
+        logger.info(f"[semantic UI] STEP 2 — text empty, trying re-extract from path={path!r}")
         if path:
             try:
                 from domain.tools.extractor import extract_document
                 doc_text = extract_document(path).get("text", "") or ""
-            except Exception:
-                pass
+                logger.info(f"[semantic UI] STEP 2 — re-extracted {len(doc_text)} chars")
+            except Exception as exc:
+                logger.warning(f"[semantic UI] STEP 2 — re-extract failed: {exc}")
 
     if not doc_text.strip():
+        logger.warning(f"[semantic UI] STEP 2 FAIL — no text for {doc_name!r}")
         return f"❌ `{doc_name}` has no extractable text — semantic check cannot run."
 
+    logger.info(f"[semantic UI] STEP 2 OK — {len(doc_text)} chars, excerpt[:80]={doc_text[:80]!r}")
+
+    # ── STEP 3: semantic_check (with hard timeout to prevent UI freeze) ──────
+    logger.info(f"[semantic UI] STEP 3 — calling semantic_check(doc_type={doc_type!r})")
+    import concurrent.futures as _cf
     try:
-        findings = semantic_check(doc_text, doc_type=doc_type)
+        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+            _fut = _pool.submit(semantic_check, doc_text, doc_type)
+            try:
+                findings = _fut.result(timeout=30)  # 30s hard cap
+            except _cf.TimeoutError:
+                logger.warning("[semantic UI] STEP 3 TIMEOUT after 30s")
+                findings = []
     except Exception as exc:
-        logger.warning(f"[semantic UI] unexpected error: {exc}")
+        logger.warning(f"[semantic UI] STEP 3 EXCEPTION: {exc}")
         findings = []
+
+    logger.info(f"[semantic UI] STEP 3 — semantic_check returned {len(findings)} finding(s)")
 
     if not findings:
         return (
-            f"⚠️ **Semantic check unavailable** for `{doc_name}`.  \n"
-            "ChromaDB may be empty or the model could not complete. "
-            "Check logs, or run `python -m scripts.load_standards` first."
+            f"⚠️ **Semantic check returned no results** for `{doc_name}`.  \n"
+            "ChromaDB may be empty, the model could not complete, or "
+            "`SEMANTIC_ENABLED` is not set. Check terminal logs for `[semantic]` lines."
         )
 
     return _semantic_result_md(doc_name, findings)
@@ -402,7 +438,10 @@ def _get_file_path(f) -> str:
 # Return shape for both scan handlers:
 # (audit_state, docs_state, hero, stats, reasons_fig, doc_type_fig,
 #  table_rows, detail_md, source_label)
-_EMPTY_RESULT = (None, [], "", "", None, None, [], "_No data._", "")
+# IMPORTANT: gr.Plot with value=None stays in "processing" forever in Gradio 6.
+# Always return an empty Figure, never None, for plot outputs.
+_EMPTY_FIG = go.Figure().update_layout(title="")
+_EMPTY_RESULT = (None, [], "", "", _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
 
 
 def _do_audit(target: str, extrapolate: bool, source_label: str) -> tuple:
@@ -413,50 +452,71 @@ def _do_audit(target: str, extrapolate: bool, source_label: str) -> tuple:
     a 100% deterministic Python pipeline with ZERO LLM calls regardless of
     folder size or file count. DB writes are fire-and-forget; a DB outage
     never breaks the scan. The agent/semantic layer is NEVER invoked here.
+
+    Always returns the full 9-tuple even on internal failure — gr.Plot outputs
+    are ALWAYS valid Figure objects, never None (None leaves plots in
+    "processing" forever in Gradio 6).
     """
-    result      = audit_and_persist(target)
-    documents   = result.get("documents", [])
-    docs_sorted = sorted(documents, key=lambda d: d.get("trust_score", 1.0))
+    try:
+        result      = audit_and_persist(target)
+        documents   = result.get("documents", [])
+        docs_sorted = sorted(documents, key=lambda d: d.get("trust_score", 1.0))
 
-    total_docs = result.get("headline", {}).get("total_documents", 0)
-    if total_docs >= LARGE_FOLDER_WARN:
-        result["_large_folder_warning"] = (
-            f"⚠️ Large folder: {total_docs:,} files scanned. "
-            "Results are complete — no files were skipped."
+        total_docs = result.get("headline", {}).get("total_documents", 0)
+        if total_docs >= LARGE_FOLDER_WARN:
+            result["_large_folder_warning"] = (
+                f"⚠️ Large folder: {total_docs:,} files scanned. "
+                "Results are complete — no files were skipped."
+            )
+
+        reasons  = _reasons_fig(result)
+        doc_type = _doc_type_fig(result)
+
+        return (
+            result,
+            docs_sorted,
+            _hero_html(result, extrapolate),
+            _stats_html(result, extrapolate),
+            reasons  if reasons  is not None else _EMPTY_FIG,
+            doc_type if doc_type is not None else _EMPTY_FIG,
+            _build_table_rows(docs_sorted),
+            "_Select a row to see document details._",
+            source_label,
         )
-
-    return (
-        result,
-        docs_sorted,
-        _hero_html(result, extrapolate),
-        _stats_html(result, extrapolate),
-        _reasons_fig(result),
-        _doc_type_fig(result),
-        _build_table_rows(docs_sorted),
-        "_Select a row to see document details._",
-        source_label,
-    )
+    except Exception as exc:
+        logger.exception(f"[_do_audit] INTERNAL ERROR for {target!r}: {exc}")
+        return (
+            None, [],
+            f"❌ **Audit error:** {exc}", "",
+            _EMPTY_FIG, _EMPTY_FIG,
+            [], "_No data._", source_label,
+        )
 
 
 def run_folder_audit(folder: str, extrapolate: bool) -> tuple:
     """Section 1 handler: scan a local / synced folder. Ignores any uploads."""
+    logger.info(f"[run_folder_audit] START folder={folder!r}")
     target = (folder or DEFAULT_FOLDER).strip()
     if not os.path.isdir(target):
         err = f"❌ Folder not found: `{target}`"
-        return (None, [], err, "", None, None, [], "_No data._", "")
+        logger.warning(f"[run_folder_audit] END (folder not found)")
+        return (None, [], err, "", _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
     try:
-        return _do_audit(target, extrapolate,
-                         source_label=f"📁 **Results for folder:** `{target}`")
+        result = _do_audit(target, extrapolate,
+                           source_label=f"📁 **Results for folder:** `{target}`")
+        logger.info(f"[run_folder_audit] END OK docs={result[0]['headline']['total_documents'] if result[0] else 0}")
+        return result
     except Exception as exc:
-        logger.exception(f"Folder audit error: {exc}")
-        return (None, [], f"❌ **Error:** {exc}", "", None, None, [], "_No data._", "")
+        logger.exception(f"[run_folder_audit] END ERROR: {exc}")
+        return (None, [], f"❌ **Error:** {exc}", "", _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
 
 
 def run_upload_audit(uploaded_files, extrapolate: bool) -> tuple:
     """Section 2 handler: audit only the uploaded file(s). Ignores folder path."""
+    logger.info(f"[run_upload_audit] START files={len(uploaded_files) if uploaded_files else 0}")
     if not uploaded_files:
         msg = "⚠️ **Please upload at least one document before scanning.**"
-        return (None, [], msg, "", None, None, [], "_No data._", "")
+        return (None, [], msg, "", _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
 
     tmp_dir = None
     try:
@@ -470,18 +530,20 @@ def run_upload_audit(uploaded_files, extrapolate: bool) -> tuple:
 
         if not copied:
             return (None, [], "❌ No readable files found in the upload.", "",
-                    None, None, [], "_No data._", "")
+                    _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
 
         n = len(copied)
         names_md = ", ".join(f"`{c}`" for c in copied[:3])
         if n > 3:
             names_md += f" +{n - 3} more"
         label = f"📤 **Results for {n} uploaded file(s):** {names_md}"
-        return _do_audit(tmp_dir, extrapolate, source_label=label)
+        result = _do_audit(tmp_dir, extrapolate, source_label=label)
+        logger.info(f"[run_upload_audit] END OK files={n}")
+        return result
 
     except Exception as exc:
-        logger.exception(f"Upload audit error: {exc}")
-        return (None, [], f"❌ **Error:** {exc}", "", None, None, [], "_No data._", "")
+        logger.exception(f"[run_upload_audit] END ERROR: {exc}")
+        return (None, [], f"❌ **Error:** {exc}", "", _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
     finally:
         if tmp_dir and os.path.isdir(tmp_dir):
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -1019,11 +1081,13 @@ _ANALYTICS_DISABLED_HTML = (
 
 def run_analytics_ui():
     """Refresh handler for Tab 4 — queries Postgres and returns all chart data."""
-    _empty = (None, None, None, None, None)
+    logger.info("[run_analytics_ui] START")
+    _empty = (go.Figure(), go.Figure(), go.Figure(), go.Figure(), go.Figure())
 
     # Guard 1: analytics disabled via env flag — return immediately, no network call
     if not settings.db_enabled:
-        return ("", *_empty, "")
+        logger.info("[run_analytics_ui] END (DB disabled)")
+        return (_ANALYTICS_DISABLED_HTML, *_empty, "")
 
     # Guard 2: DB reachable but query failed — show error, never hang
     try:
@@ -1037,8 +1101,8 @@ def run_analytics_ui():
         owners   = get_owners()
         timeline = get_timeline()
 
-        return (
-            _savings_html(stats),
+        result = (
+            _savings_html(stats),   # colleague's richer hero card with ROI metrics
             _severity_fig(sev),
             _status_fig(statuses),
             _rules_fig(rules),
@@ -1046,9 +1110,16 @@ def run_analytics_ui():
             _timeline_fig(timeline),
             "",
         )
+        logger.info("[run_analytics_ui] END OK")
+        return result
     except Exception as exc:
-        logger.warning(f"Analytics DB error: {exc}")
-        return ("", *_empty, f"🔴 {exc}")
+        logger.warning(f"[run_analytics_ui] END ERROR: {exc}")
+        err_html = (
+            f'<div style="padding:16px;background:#fef2f2;border:1px solid #fecaca;'
+            f'border-radius:8px;color:#991b1b;font-size:13px;">'
+            f'⚠️ <strong>Database unreachable</strong><br>{exc}</div>'
+        )
+        return (err_html, *_empty, f"🔴 {exc}")
 
 
 CHAT_EXAMPLES = [
@@ -1203,7 +1274,10 @@ def build_ui() -> gr.Blocks:
                     size="sm",
                 )
                 semantic_md = gr.Markdown(
-                    value="_Select a document row and click the button above to run a semantic compliance check._"
+                    value=(
+                        "**Semantic compliance check** — click the button above after running "
+                        "a scan. If no row is selected, the first flagged document is used automatically."
+                    )
                 )
 
             # ═══════════════════════════════════════════════════════════════════
@@ -1335,7 +1409,10 @@ def build_ui() -> gr.Blocks:
 
         # Tab 2 — row selection → detail panel + record selected index
         def _select_and_track(evt: gr.SelectData, docs: list):
-            row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else int(evt.index)
+            raw = evt.index
+            row_idx = raw[0] if isinstance(raw, (list, tuple)) else int(raw)
+            logger.info(f"[semantic UI] row selected — evt.index={raw!r} → row_idx={row_idx}, "
+                        f"docs_count={len(docs) if docs else 0}")
             return _doc_detail_md(row_idx, docs), row_idx
 
         doc_table.select(
@@ -1404,9 +1481,10 @@ def build_ui() -> gr.Blocks:
         analytics_tab.select(run_analytics_ui,         outputs=_analytics_outputs).then(fn=None, js=_animate_js)
         analytics_timer.tick(run_savings_only,          outputs=[analytics_savings])
 
-        # Queue is required so slow/blocking handlers (analytics DB, chat streaming)
-        # run in worker threads and cannot freeze the Gradio event loop.
-        demo.queue()
+        # Queue: required so every handler runs in a worker thread, never on the
+        # event loop. max_size=20 prevents runaway queuing; concurrency_limit=4
+        # lets scan/semantic/chat run in parallel (not serially behind each other).
+        demo.queue(max_size=20, default_concurrency_limit=4)
 
     return demo
 

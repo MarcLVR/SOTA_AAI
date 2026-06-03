@@ -104,6 +104,12 @@ def _make_agent_node(agent, name: str):
         return {
             "messages": [last_msg],
             "last_specialist": name,
+            # Signal that this specialist is done — hitl should proceed to END,
+            # not loop back here.  The hitl conditional uses next_agent to decide:
+            # "general" → re-enter general (only for HITL rejection feedback),
+            # anything else → END.  Setting "FINISH" here prevents the approval
+            # path from accidentally routing back to the specialist that just ran.
+            "next_agent": "FINISH",
             # Reset revision flag so critic starts fresh
             "should_revise": False,
         }
@@ -223,24 +229,32 @@ def build_graph(mcp_tools: list | None = None, enable_hitl: bool = False) -> Any
         },
     )
 
-    # Specialists → critic
-    builder.add_edge("researcher", "critic")
-    builder.add_edge("coder",      "critic")
-    builder.add_edge("general",    "critic")
-    builder.add_edge("auditor",    "critic")
+    # Specialists → critic (when enabled) or directly to hitl (when disabled)
+    if settings.critic_enabled:
+        builder.add_edge("researcher", "critic")
+        builder.add_edge("coder",      "critic")
+        builder.add_edge("general",    "critic")
+        builder.add_edge("auditor",    "critic")
 
-    # Critic → back to specialist (revise) or supervisor (pass)
-    builder.add_conditional_edges(
-        "critic",
-        route_after_critic,
-        {
-            "researcher": "researcher",
-            "coder":      "coder",
-            "general":    "general",
-            "auditor":    "auditor",
-            "FINISH":     "hitl",
-        },
-    )
+        # Critic → back to specialist (revise) or hitl (pass)
+        builder.add_conditional_edges(
+            "critic",
+            route_after_critic,
+            {
+                "researcher": "researcher",
+                "coder":      "coder",
+                "general":    "general",
+                "auditor":    "auditor",
+                "FINISH":     "hitl",
+            },
+        )
+    else:
+        # Critic disabled: specialists go straight to hitl, skipping Reflexion loop.
+        # critic_node is still registered (the node object exists) but unreachable.
+        builder.add_edge("researcher", "hitl")
+        builder.add_edge("coder",      "hitl")
+        builder.add_edge("general",    "hitl")
+        builder.add_edge("auditor",    "hitl")
 
     # HITL → END (or back to general if rejected)
     builder.add_conditional_edges(
@@ -256,7 +270,9 @@ def build_graph(mcp_tools: list | None = None, enable_hitl: bool = False) -> Any
     checkpointer = SqliteSaver(conn)
 
     graph = builder.compile(checkpointer=checkpointer)
-    logger.info(f"LangGraph compiled (hitl={enable_hitl})")
+    logger.info(
+        f"LangGraph compiled (hitl={enable_hitl}, critic={settings.critic_enabled})"
+    )
     return graph
 
 

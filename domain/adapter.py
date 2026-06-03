@@ -272,16 +272,26 @@ def audit_and_persist(folder: str, default_owner: str = "nacho") -> dict:
     Callers (e.g. ui/app.py) only need to swap the function name; the return
     value is identical so all downstream UI code keeps working unchanged.
 
-    default_owner: escalation/admin owner ('nacho') assigned to findings whose
-    owner cannot be inferred from the document's author metadata — e.g. orphan
-    documents and formats with no author metadata (.txt/.csv/.json). Routes
-    "ownerless" documents to a real inbox instead of dropping them silently.
-    DB errors are caught and logged so a DB outage never breaks the UI scan.
+    default_owner: escalation/admin owner assigned to findings whose owner cannot
+    be inferred from the document's author metadata (e.g. orphan documents,
+    formats with no author metadata). Routes "ownerless" documents to a real
+    inbox instead of dropping them silently.
+
+    When DB_ENABLED=false (default), the DB write is skipped entirely — no
+    connection attempts, no timeouts, no UI freeze.
     """
     from domain.run_audit import audit_repository
     from domain.pipeline import _resolve_owner   # author-metadata → team owner
 
     result = audit_repository(folder)
+
+    # Fast-path: skip ALL DB work when the database is not configured.
+    # Without this guard every flagged document would attempt a TCP connection
+    # (connect_timeout=3s) that blocks the scan handler for up to
+    # N_flagged × 3s — freezing the Gradio "processing" spinner.
+    from config import settings
+    if not settings.db_enabled:
+        return result
 
     import sys as _sys, os as _os
     _chase = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "chase")
