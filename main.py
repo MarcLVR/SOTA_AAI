@@ -22,10 +22,11 @@ def launch_ui():
     start_bot_background()
     start_notifier_daemon()
 
-    from ui.app import build_ui
+    from ui.app import build_ui, _EDS_CSS
     app = build_ui()
     root_path = os.getenv("GRADIO_ROOT_PATH", "")
-    app.launch(server_name="0.0.0.0", server_port=7860, root_path=root_path)
+    app.launch(server_name="0.0.0.0", server_port=7860,
+               root_path=root_path, css=_EDS_CSS)
 
 
 def cli_chat():
