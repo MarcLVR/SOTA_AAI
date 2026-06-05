@@ -58,7 +58,7 @@ _SUGGESTIONS: dict[str, str] = {
     "placeholder":
         "Complete or remove placeholder content (TBD / TODO / PENDING) before production use.",
     "brand_misuse":
-        "Write the company name exactly as 'OmniAccess' (capital O and A); never pluralise it.",
+        "Write the brand name with the exact canonical casing; never pluralise it.",
     "missing_metadata":
         "Add the missing metadata field to the document properties or header.",
     "unclassified":
@@ -264,7 +264,7 @@ def audit_repository_to_findings(folder: str) -> dict[str, list[dict]]:
 
 # ── Scan + persist (drop-in replacement for audit_repository) ────────────────
 
-def audit_and_persist(folder: str, default_owner: str = "nacho") -> dict:
+def audit_and_persist(folder: str, default_owner: str = "") -> dict:
     """
     Run audit_repository(folder), persist flagged findings to PostgreSQL, and
     return the same result dict — drop-in replacement for audit_repository().
@@ -282,6 +282,10 @@ def audit_and_persist(folder: str, default_owner: str = "nacho") -> dict:
     """
     from domain.run_audit import audit_repository
     from domain.pipeline import _resolve_owner   # author-metadata → team owner
+    from config import settings
+
+    if not default_owner:
+        default_owner = settings.default_owner
 
     result = audit_repository(folder)
 
@@ -289,7 +293,6 @@ def audit_and_persist(folder: str, default_owner: str = "nacho") -> dict:
     # Without this guard every flagged document would attempt a TCP connection
     # (connect_timeout=3s) that blocks the scan handler for up to
     # N_flagged × 3s — freezing the Gradio "processing" spinner.
-    from config import settings
     if not settings.db_enabled:
         return result
 

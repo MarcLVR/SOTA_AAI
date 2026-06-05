@@ -732,19 +732,19 @@ def new_session() -> str:
 # Tab 4 — Analytics helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── ROI model constants (client: OmniAccess SharePoint) ───────────────────────
-_ROI_OFFICE_TB        = 4.0      # office SharePoint (TB)
-_ROI_GROUP_TB         = 40.0     # group SharePoint (TB)
-_ROI_DOCS_PER_TB      = 7_500    # enterprise SharePoint average (mixed Office files)
-_ROI_WORKER_EUR_HR    = 40.0     # loaded EU knowledge-worker cost €/h
-_ROI_AUDIT_MIN_DOC    = 3.0      # minutes to manually audit one document
-_ROI_AUDITS_PER_YEAR  = 2        # compliance review cycles per year
-_ROI_RAG_IN_INDEX     = 0.50     # fraction of flagged docs that land in RAG index
-_ROI_RAG_Q_PER_DOC    = 4        # RAG queries/year that touch a flagged doc
-_ROI_MISLEAD_RATE     = 0.25     # fraction of those queries that return a wrong answer
-_ROI_FIX_MIN          = 20.0     # minutes to detect and correct one misleading answer
-_ROI_SP_EUR_PER_GB_MO = 0.18     # Microsoft 365 extra storage pricing €/GB/month
-_ROI_FLAG_RATE        = 0.40     # industry benchmark: ~40 % of docs fail compliance
+# ── ROI model constants ───────────────────────────────────────────────────────
+_ROI_SMALL_CORPUS_TB      = 4.0      # small repository (TB)
+_ROI_LARGE_CORPUS_TB      = 40.0     # large repository (TB)
+_ROI_DOCS_PER_TB          = 7_500    # enterprise average (mixed Office files)
+_ROI_WORKER_EUR_HR        = 40.0     # loaded knowledge-worker cost €/h
+_ROI_AUDIT_MIN_DOC        = 3.0      # minutes to manually audit one document
+_ROI_AUDITS_PER_YEAR      = 2        # compliance review cycles per year
+_ROI_RAG_IN_INDEX         = 0.50     # fraction of flagged docs that land in RAG index
+_ROI_RAG_Q_PER_DOC        = 4        # RAG queries/year that touch a flagged doc
+_ROI_MISLEAD_RATE         = 0.25     # fraction of those queries that return a wrong answer
+_ROI_FIX_MIN              = 20.0     # minutes to detect and correct one misleading answer
+_ROI_STORAGE_EUR_PER_GB_MO = 0.18   # cloud storage pricing €/GB/month
+_ROI_FLAG_RATE            = 0.40     # industry benchmark: ~40 % of docs fail compliance
 
 
 def _roi_html(flag_rate: float = _ROI_FLAG_RATE) -> str:
@@ -754,7 +754,7 @@ def _roi_html(flag_rate: float = _ROI_FLAG_RATE) -> str:
         docs       = int(tb * _ROI_DOCS_PER_TB)
         flagged    = int(docs * flag_rate)
         gb_flagged = tb * 1_024 * flag_rate
-        storage    = gb_flagged * _ROI_SP_EUR_PER_GB_MO * 12
+        storage    = gb_flagged * _ROI_STORAGE_EUR_PER_GB_MO * 12
         audit_h    = docs * _ROI_AUDIT_MIN_DOC / 60
         audit      = audit_h * _ROI_WORKER_EUR_HR * _ROI_AUDITS_PER_YEAR
         misleading = int(flagged * _ROI_RAG_IN_INDEX * _ROI_RAG_Q_PER_DOC * _ROI_MISLEAD_RATE)
@@ -774,18 +774,18 @@ def _roi_html(flag_rate: float = _ROI_FLAG_RATE) -> str:
             'border-radius:12px;padding:20px;">'
 
             f'<div style="font-size:13px;font-weight:700;color:#6b7280;text-transform:uppercase;'
-            f'letter-spacing:.08em;margin-bottom:5px;">{label} · {tb:.0f} TB SharePoint</div>'
+            f'letter-spacing:.08em;margin-bottom:5px;">{label} · {tb:.0f} TB</div>'
             f'<div style="font-size:11px;color:#9ca3af;margin-bottom:14px;">'
             f'~{d["docs"]:,} documents &nbsp;·&nbsp; {flag_rate*100:.0f}% flagged'
             f' &nbsp;·&nbsp; {d["gb_flagged"]:,.0f} GB at risk</div>'
 
             '<div style="background:#fef3c7;border-radius:8px;padding:12px;margin-bottom:8px;">'
             '<div style="font-size:11px;color:#92400e;font-weight:600;margin-bottom:2px;">'
-            '🗄️ WASTED SHAREPOINT STORAGE</div>'
+            '🗄️ WASTED STORAGE COST</div>'
             f'<div style="font-size:24px;font-weight:700;color:#b45309;">{_fmt(d["storage"])}'
             '<span style="font-size:13px;font-weight:400;">/yr</span></div>'
             f'<div style="font-size:11px;color:#78350f;">'
-            f'{d["gb_flagged"]:,.0f} GB stale content · €0.18/GB/month (Microsoft 365)</div></div>'
+            f'{d["gb_flagged"]:,.0f} GB stale content · €{_ROI_STORAGE_EUR_PER_GB_MO}/GB/month</div></div>'
 
             '<div style="background:#ede9fe;border-radius:8px;padding:12px;margin-bottom:8px;">'
             '<div style="font-size:11px;color:#5b21b6;font-weight:600;margin-bottom:2px;">'
@@ -793,7 +793,7 @@ def _roi_html(flag_rate: float = _ROI_FLAG_RATE) -> str:
             f'<div style="font-size:24px;font-weight:700;color:#6d28d9;">{_fmt(d["audit"])}'
             '<span style="font-size:13px;font-weight:400;">/yr</span></div>'
             f'<div style="font-size:11px;color:#4c1d95;">'
-            f'{d["audit_h"]:,.0f} h/audit · {_ROI_AUDITS_PER_YEAR}× per year · DAVE replaces in seconds</div></div>'
+            f'{d["audit_h"]:,.0f} h/audit · {_ROI_AUDITS_PER_YEAR}× per year · automated in seconds</div></div>'
 
             '<div style="background:#dcfce7;border-radius:8px;padding:12px;margin-bottom:14px;">'
             '<div style="font-size:11px;color:#166534;font-weight:600;margin-bottom:2px;">'
@@ -811,8 +811,8 @@ def _roi_html(flag_rate: float = _ROI_FLAG_RATE) -> str:
             '</div>'
         )
 
-    o = _calc(_ROI_OFFICE_TB)
-    g = _calc(_ROI_GROUP_TB)
+    o = _calc(_ROI_SMALL_CORPUS_TB)
+    g = _calc(_ROI_LARGE_CORPUS_TB)
     assumptions = (
         f"{_ROI_DOCS_PER_TB:,} docs/TB · {flag_rate*100:.0f}% flag rate (Gartner industry avg) · "
         f"€{_ROI_WORKER_EUR_HR:.0f}/h loaded cost · {_ROI_AUDIT_MIN_DOC:.0f} min manual audit/doc · "
@@ -821,10 +821,10 @@ def _roi_html(flag_rate: float = _ROI_FLAG_RATE) -> str:
     return (
         '<div style="margin:16px 0 8px;">'
         '<div style="font-size:17px;font-weight:700;color:#111827;margin-bottom:2px;">'
-        '💶 Value at Stake — What DAVE saves</div>'
+        f'💶 Value at Stake — What {settings.app_name} saves</div>'
         '<div style="font-size:13px;color:#6b7280;margin-bottom:16px;">'
-        'Cost of unmanaged document entropy across your SharePoint repositories</div>'
-        f'<div style="display:flex;gap:16px;flex-wrap:wrap;">{_panel("Office", _ROI_OFFICE_TB, o)}{_panel("Group", _ROI_GROUP_TB, g)}</div>'
+        'Cost of unmanaged document entropy across your repositories</div>'
+        f'<div style="display:flex;gap:16px;flex-wrap:wrap;">{_panel("Small", _ROI_SMALL_CORPUS_TB, o)}{_panel("Large", _ROI_LARGE_CORPUS_TB, g)}</div>'
         f'<div style="margin-top:10px;font-size:11px;color:#9ca3af;font-style:italic;">📐 {assumptions}</div>'
         '</div>'
     )
@@ -956,7 +956,7 @@ def _savings_html(s: dict) -> str:
             '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:16px;'
             'padding:32px;text-align:center;">'
             '<div style="font-size:32px;margin-bottom:8px;">📊</div>'
-            '<div style="font-size:15px;font-weight:600;color:#374151;margin-bottom:4px;">DAVE Impact Dashboard</div>'
+            f'<div style="font-size:15px;font-weight:600;color:#374151;margin-bottom:4px;">{settings.app_name} Impact Dashboard</div>'
             '<div style="font-size:13px;color:#9ca3af;">Run a scan to populate live metrics</div>'
             '</div>'
         )
@@ -996,7 +996,7 @@ def _savings_html(s: dict) -> str:
 
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">'
         '<div>'
-        '<div style="font-size:17px;font-weight:700;color:#111827;letter-spacing:-.01em;">📊 DAVE Impact Dashboard</div>'
+        f'<div style="font-size:17px;font-weight:700;color:#111827;letter-spacing:-.01em;">📊 {settings.app_name} Impact Dashboard</div>'
         '<div style="font-size:11px;color:#9ca3af;margin-top:3px;">Cumulative · updates every 8 s</div>'
         '</div>'
         '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:20px;'
@@ -1135,7 +1135,7 @@ TABLE_HEADERS = ["Name", "Type", "Size", "Modified", "Trust", "Supervision?", "T
 
 
 _DAVE_ANIMATE_JS = """
-function daveAnimate() {
+function auditAnimate() {
   var D = 1400;
   function ease(t) { return 1 - Math.pow(1 - t, 3); }
   document.querySelectorAll('[data-dave]').forEach(function(el) {
@@ -1476,7 +1476,7 @@ def build_ui() -> gr.Blocks:
             analytics_timeline_plot,
             analytics_status,
         ]
-        _animate_js = "() => { if(typeof daveAnimate==='function') daveAnimate(); }"
+        _animate_js = "() => { if(typeof auditAnimate==='function') auditAnimate(); }"
         analytics_refresh_btn.click(run_analytics_ui, outputs=_analytics_outputs).then(fn=None, js=_animate_js)
         analytics_tab.select(run_analytics_ui,         outputs=_analytics_outputs).then(fn=None, js=_animate_js)
         analytics_timer.tick(run_savings_only,          outputs=[analytics_savings])

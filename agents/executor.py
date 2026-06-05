@@ -2,7 +2,7 @@
 ReAct Executor — applies document fixes upon owner approval.
 
 Pattern: Thought → Action → Observation (max 3 attempts per finding).
-Triggered by telegram_bot when owner taps "Que DAVE lo corrija".
+Triggered by telegram_bot when owner taps the "Fix automatically" button.
 """
 
 import json
@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "chase"))
 
 from db import get_run, update_run_status, update_finding_status
 
-log = logging.getLogger("dave-executor")
+log = logging.getLogger("doc-executor")
 
 MAX_ATTEMPTS = 3
 
@@ -38,7 +38,8 @@ def _react_step(document: str, finding: dict, attempt: int) -> dict:
     """
     One ReAct iteration. Returns {"thought": ..., "action": ..., "observation": ..., "done": bool}.
     """
-    prompt = f"""You are DAVE, a document compliance assistant. Apply the following fix to a document.
+    from config import settings as _s
+    prompt = f"""You are {_s.app_name}, a document compliance assistant. Apply the following fix to a document.
 
 Document: {document}
 Finding: {finding['title']}

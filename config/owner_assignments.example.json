@@ -1,0 +1,18 @@
+{
+  "_comment": "Copy this file to owner_assignments.json and fill in your team's data.",
+  "author_names": {
+    "alice": "Alice Johnson — Security & Compliance",
+    "bob":   "Bob Smith — Data Governance",
+    "carol": "Carol Lee — Project Management",
+    "dave":  "Dave Torres — Legal & Privacy"
+  },
+  "owners": {
+    "domain/demo_corpus/files/security_policy_2021.docx":  "alice",
+    "domain/demo_corpus/files/data_classification_policy.docx": "bob",
+    "domain/demo_corpus/files/project_charter_crm_refresh.docx": "carol",
+    "domain/demo_corpus/files/privacy_policy.docx": "dave"
+  },
+  "deliberately_unowned": [
+    "domain/demo_corpus/files/onboarding_procedure_draft.docx"
+  ]
+}

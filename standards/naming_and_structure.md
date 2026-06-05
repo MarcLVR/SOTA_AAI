@@ -1,8 +1,8 @@
-# Naming Conventions & SharePoint Folder Structure
+# Naming Conventions & Folder Structure
 
-Consistent file names and folder layout let DAVE infer a document's type and let
-people find the current version. Names also drive doc-type detection: DAVE reads the
-filename to decide which rules to apply.
+Consistent file names and folder layout let you infer a document's type and find
+the current version. Names also drive doc-type detection: reading the filename to
+decide which rules to apply.
 
 ## File naming convention
 
@@ -20,20 +20,20 @@ Rules:
   will be flagged.
 - One canonical version per document; archive superseded versions.
 
-## Type keywords DAVE looks for in filenames
+## Type keywords detected in filenames
 
-To be auto-classified correctly, include one of these keywords (English or Spanish):
+To be auto-classified correctly, include one of these keywords:
 
 | Detected type | Filename keywords |
 |---|---|
-| Policy | policy, politica, política |
-| Procedure | procedure, sop, procedimiento |
-| Contract | contract, agreement, contrato, nda, msa |
-| Data dictionary | data dictionary, data_dictionary, diccionario |
+| Policy | policy |
+| Procedure | procedure, sop |
+| Contract | contract, agreement, nda, msa |
+| Data dictionary | data dictionary, data_dictionary |
 | Data contract | data contract, data_contract |
-| Project charter | charter, acta de proyecto |
-| Status report | status, weekly, report, informe |
-| RAID log | raid, risk log, riesgos |
+| Project charter | charter |
+| Status report | status, weekly, report |
+| RAID log | raid, risk log |
 | OKR | okr, objectives |
 | Asana task export | asana, task_export |
 | Business Central record | business central, bc_, navision, dynamics |
@@ -41,7 +41,7 @@ To be auto-classified correctly, include one of these keywords (English or Spani
 A filename with no recognised keyword is treated as `unknown` and gets the default
 540-day staleness threshold and `default` metadata requirements.
 
-## SharePoint folder structure
+## Folder structure
 
 Organise by department, then by document type:
 

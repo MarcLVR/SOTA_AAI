@@ -26,9 +26,6 @@ class Settings(BaseSettings):
     groq_model: str = "llama-3.3-70b-versatile"
     groq_api_key: str | None = None
 
-    # ── Unused / disabled providers (kept for re-enable convenience) ──────────
-    gemini_model: str = "gemini-2.5-flash"             # disabled — quota too restrictive
-    google_api_key: str | None = None
     openai_api_key: str | None = None
 
     # ── Agent behaviour ────────────────────────────────────────────────────────
@@ -60,6 +57,12 @@ class Settings(BaseSettings):
 
     # ── Analytics / PostgreSQL ────────────────────────────────────────────────
     db_enabled: bool = False   # set True only when Postgres is reachable; protects demo
+
+    # ── Application identity ──────────────────────────────────────────────────
+    app_name: str = "AI Auditor"          # displayed in UI, bot messages, executor prompts
+    brand_name: str = ""                   # canonical brand name to check; "" disables brand check
+    default_owner: str = ""               # fallback owner when doc author cannot be resolved
+    owner_usernames: str = ""             # comma-separated owner usernames, e.g. "alice,bob"
 
     # ── Guardrails ────────────────────────────────────────────────────────────
     guardrail_max_input_length: int = 8000

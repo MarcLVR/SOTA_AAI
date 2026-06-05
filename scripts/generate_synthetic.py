@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-generate_synthetic.py — generates synthetic corporate documents for DAVE testing.
+generate_synthetic.py — generates synthetic corporate documents for compliance audit testing.
 
 Outputs 8 documents (DOCX, PDF, PPTX) with deliberate compliance violations
 plus a manifest.json with expected_findings per document.
@@ -173,7 +173,7 @@ def make_spec_autenticacion(out: Path) -> list[str]:
 
     doc = Document()
     cp = doc.core_properties
-    cp.title   = "Especificacion de Autenticacion - Sistema DAVE"
+    cp.title   = "Especificacion de Autenticacion - Sistema interno"
     cp.author  = "pendiente"                   # violation: placeholder
     cp.subject = "Especificacion tecnica"
     cp.created = datetime(2026, 5, 28)
@@ -188,7 +188,7 @@ def make_spec_autenticacion(out: Path) -> list[str]:
         ("Autor",       "pendiente"),           # violation: placeholder
         ("Fecha",       "TODO"),               # violation: placeholder
         ("Estado",      "BORRADOR"),
-        ("Proyecto",    "DAVE - Hackathon 2026"),
+        ("Proyecto",    "Internal Project 2026"),
     ]):
         meta.rows[i].cells[0].text = k
         meta.rows[i].cells[1].text = v
@@ -196,7 +196,7 @@ def make_spec_autenticacion(out: Path) -> list[str]:
     doc.add_paragraph()
     doc.add_heading("1. Objetivo", level=2)
     doc.add_paragraph(
-        "Este documento describe el sistema de autenticacion para la API de DAVE. "
+        "Este documento describe el sistema de autenticacion para la API interna. "
         "Define los endpoints, flujos JWT y politica de sesiones."
     )
 
@@ -323,7 +323,7 @@ def make_informe_ventas_pdf(out: Path) -> list[str]:
     pdf = PDF()
     pdf.set_author("Equipo de Ventas")
     pdf.set_title(s("Informe de Ventas Q1 2026"))
-    pdf.set_creator("DAVE Synthetic Generator")
+    pdf.set_creator("Synthetic Document Generator")
     pdf.add_page()
 
     # No portada, va directo al contenido — violacion estructura_informes.md
@@ -400,7 +400,7 @@ def make_api_design_pdf(out: Path) -> list[str]:
         def header(self):
             self.set_font("Helvetica", "B", 8)
             self.set_text_color(120, 120, 120)
-            self.cell(0, 8, "DAVE API Design - INTERNAL", align="R")
+            self.cell(0, 8, "API Design - INTERNAL", align="R")
             self.ln(4)
         def footer(self):
             self.set_y(-15)
@@ -409,12 +409,12 @@ def make_api_design_pdf(out: Path) -> list[str]:
             self.cell(0, 10, f"Page {self.page_no()}", align="C")
 
     pdf = PDF()
-    pdf.set_author("john.smith@omniaccess-internal.com")   # PII: exposed email
-    pdf.set_title("DAVE API Design FINAL v2")
+    pdf.set_author("john.smith@company-internal.com")   # PII: exposed email
+    pdf.set_title("API Design FINAL v2")
     pdf.add_page()
 
     pdf.set_font("Helvetica", "B", 20)
-    pdf.cell(0, 14, "DAVE REST API Design", ln=True, align="C")
+    pdf.cell(0, 14, "REST API Design", ln=True, align="C")
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(130, 130, 130)
     pdf.cell(0, 7, "Version: FINAL_v2  |  Status: ???  |  Last modified: see git", ln=True, align="C")
@@ -426,9 +426,9 @@ def make_api_design_pdf(out: Path) -> list[str]:
     pdf.set_font("Helvetica", "", 10)
     # Exposed emails — PII violation
     contacts = [
-        ("Tech Lead",    "john.smith@omniaccess-internal.com",  "+1 415 555 0192"),
-        ("Backend Dev",  "anna.mueller@omniaccess-internal.com",""),
-        ("DevOps",       "pedro.ruiz@omniaccess-internal.com",  "+34 600 123 456"),
+        ("Tech Lead",    "john.smith@company-internal.com",  "+1 415 555 0192"),
+        ("Backend Dev",  "anna.mueller@company-internal.com",""),
+        ("DevOps",       "pedro.ruiz@company-internal.com",  "+44 7911 123456"),
     ]
     col_w = [45, 90, 50]
     pdf.set_fill_color(230, 230, 230)
@@ -521,7 +521,7 @@ def make_kickoff_pptx(out: Path) -> list[str]:
             "TBD — definir con el cliente en la proxima reunion",   # placeholder
             "Pendiente: alcance tecnico por confirmar",             # placeholder
             "Reducir tiempo de procesamiento documental en un X%",  # placeholder (X%)
-            "Integracion con SharePoint corporativo",
+            "Integration with internal document repository",
         ],
         notes_text=(                                                # PII en notas
             "NOTAS PRIVADAS: Contacto cliente: Roberto Fernandez, "
@@ -618,9 +618,9 @@ def make_q1_deck_pptx(out: Path) -> list[str]:
     add_content_slide(
         "Finance Contacts",
         [
-            "CFO: Sarah Johnson — sarah.johnson@omniaccess-internal.com — +1 212 555 0147",  # PII
-            "Controller: Luis Mora — luis.mora@omniaccess-internal.com — +34 91 555 0234",   # PII
-            "AR Team: ar-team@omniaccess-internal.com",                                       # PII
+            "CFO: Sarah Johnson — sarah.johnson@company-internal.com — +1 212 555 0147",  # PII
+            "Controller: Luis Mora — luis.mora@company-internal.com — +44 20 7946 0234",   # PII
+            "AR Team: ar-team@company-internal.com",                                       # PII
         ]
     )
 
@@ -629,7 +629,7 @@ def make_q1_deck_pptx(out: Path) -> list[str]:
         [
             "Target: EUR 1,750,000",
             "Focus: South Region recovery plan",
-            "New initiative: DAVE document compliance (internal)",
+            "New initiative: automated document compliance (internal)",
             "Headcount: TBD pending HR approval",                   # placeholder
         ]
     )
@@ -645,7 +645,7 @@ def make_q1_deck_pptx(out: Path) -> list[str]:
 def build_manifest(documents: list[dict]) -> dict:
     return {
         "generated": datetime.now().strftime("%Y-%m-%d"),
-        "description": "Documentos sinteticos corporativos para testing de DAVE",
+        "description": "Synthetic corporate documents for compliance audit testing",
         "total": len(documents),
         "with_findings": sum(1 for d in documents if d["expected_findings"]),
         "clean": sum(1 for d in documents if not d["expected_findings"]),

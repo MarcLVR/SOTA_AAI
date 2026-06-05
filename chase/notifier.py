@@ -12,16 +12,27 @@ FINDINGS_CACHE = Path(__file__).resolve().parent / "findings_cache.json"
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-def _chat_id(env_var: str) -> int:
-    val = os.getenv(env_var, "").strip()
-    return int(val) if val else 0
 
-OWNER_MAP: dict[str, int] = {
-    "luca":    _chat_id("TELEGRAM_LUCA_CHAT_ID"),
-    "nacho":   _chat_id("TELEGRAM_NACHO_CHAT_ID"),
-    "marc":    _chat_id("TELEGRAM_MARC_CHAT_ID"),
-    "augusto": _chat_id("TELEGRAM_AUGUSTO_CHAT_ID"),
-}
+def _build_owner_map() -> dict[str, int]:
+    """Build owner→chat_id map from TELEGRAM_OWNERS and per-owner env vars.
+
+    Set TELEGRAM_OWNERS=alice,bob then TELEGRAM_ALICE_CHAT_ID=123 etc.
+    Falls back to DB lookup at send time when an owner is not in this map.
+    """
+    owners_str = os.getenv("TELEGRAM_OWNERS", "")
+    result: dict[str, int] = {}
+    for name in (n.strip() for n in owners_str.split(",") if n.strip()):
+        env_key = f"TELEGRAM_{name.upper()}_CHAT_ID"
+        raw = os.getenv(env_key, "").strip()
+        if raw:
+            try:
+                result[name] = int(raw)
+            except ValueError:
+                pass
+    return result
+
+
+OWNER_MAP: dict[str, int] = _build_owner_map()
 
 SEVERITY_ICON = {"high": "🔴", "medium": "🟡", "low": "🟢"}
 
@@ -60,12 +71,12 @@ def send_finding(owner: str, document: str, findings: list[dict], run_id: int | 
     keyboard = {
         "inline_keyboard": [
             [
-                {"text": "✅ Fix with DAVE",    "callback_data": f"fix:{run_id}"},
-                {"text": "✏️ Fix manually",     "callback_data": f"manual:{run_id}"},
+                {"text": "✅ Fix automatically", "callback_data": f"fix:{run_id}"},
+                {"text": "✏️ Fix manually",      "callback_data": f"manual:{run_id}"},
             ],
             [
-                {"text": "🚫 Ignore",           "callback_data": f"ignore:{run_id}"},
-                {"text": "ℹ️ More details",     "callback_data": f"info:{run_id}"},
+                {"text": "🚫 Ignore",            "callback_data": f"ignore:{run_id}"},
+                {"text": "ℹ️ More details",      "callback_data": f"info:{run_id}"},
             ],
         ]
     }
@@ -121,8 +132,9 @@ def _poll_once() -> None:
         doc_name = run["doc_name"]
 
         by_owner: dict[str, list] = {}
+        _default_owner = os.getenv("DEFAULT_OWNER", "")
         for f in run.get("findings", []):
-            owner = f.get("owner_username") or "nacho"
+            owner = f.get("owner_username") or _default_owner or "admin"
             by_owner.setdefault(owner, []).append({
                 "title":      f.get("rule_code") or f.get("detail", "Issue"),
                 "location":   f.get("location", ""),

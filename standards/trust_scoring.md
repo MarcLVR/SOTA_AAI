@@ -1,6 +1,6 @@
 # Trust Score & Supervision Threshold
 
-DAVE assigns every document a **trust score** between 0.0 and 1.0. The score is a
+The auditor assigns every document a **trust score** between 0.0 and 1.0. The score is a
 weighted combination of three deterministic checks (no LLM, no tokens). It tells the
 owner, at a glance, how much the document can be trusted as-is.
 

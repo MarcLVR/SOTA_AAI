@@ -5,7 +5,6 @@ Supported providers (LLM_PROVIDER):
     anthropic -> ChatAnthropic  (default; ANTHROPIC_API_KEY required)
     groq      -> ChatGroq       (fast/free; GROQ_API_KEY required)
     ollama    -> ChatOllama     (local; Ollama service required)
-    # gemini  -> DISABLED (20 req/day free-tier quota; see commented block below)
 
 Role-based provider routing:
     ROLE_PROVIDER_<ROLE>=<provider>  overrides the default for a specific role.
@@ -143,22 +142,6 @@ def get_llm(
             temperature=t,
             num_predict=max_tok,   # Ollama uses num_predict instead of max_tokens
         )
-
-    # ── Gemini disabled — free tier limited to ~20 req/day, breaks multi-agent runs ──
-    # To re-enable: set LLM_PROVIDER=gemini and GOOGLE_API_KEY in .env,
-    # then uncomment the block below and add langchain-google-genai back to imports.
-    #
-    # if provider == "gemini":
-    #     from langchain_google_genai import ChatGoogleGenerativeAI
-    #     if not settings.google_api_key:
-    #         raise RuntimeError("Provider=gemini but GOOGLE_API_KEY is not set.")
-    #     m = model or _model_for_role(role) or settings.gemini_model
-    #     logger.info(f"Loading LLM: provider=gemini model={m} temp={t} role={role}")
-    #     return ChatGoogleGenerativeAI(
-    #         model=m, temperature=t,
-    #         google_api_key=settings.google_api_key,
-    #         convert_system_message_to_human=False,
-    #     )
 
     raise ValueError(
         f"Unknown provider={provider!r}. Valid: 'anthropic', 'groq', 'ollama'."

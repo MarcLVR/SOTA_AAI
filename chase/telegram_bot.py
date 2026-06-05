@@ -1,5 +1,5 @@
 """
-DAVE Telegram bot — handles /start and inline button callbacks.
+Document compliance Telegram bot — handles /start and inline button callbacks.
 
 Run:  python3 chase/telegram_bot.py
 Stop: Ctrl+C
@@ -27,10 +27,10 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     level=logging.INFO,
 )
-log = logging.getLogger("dave-bot")
+log = logging.getLogger("compliance-bot")
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-NACHO_CHAT_ID = int(os.getenv("TELEGRAM_NACHO_CHAT_ID", "0") or "0")
+DEFAULT_CHAT_ID = int(os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "0") or "0")
 
 
 # ---------------------------------------------------------------------------
@@ -38,13 +38,14 @@ NACHO_CHAT_ID = int(os.getenv("TELEGRAM_NACHO_CHAT_ID", "0") or "0")
 # ---------------------------------------------------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from config import settings as _s
     chat_id = update.effective_chat.id
-    name = update.effective_user.first_name or "usuario"
+    name = update.effective_user.first_name or "user"
     await update.message.reply_text(
-        f"👋 Hi {name}, I'm *DAVE* — Data Agentic Validation Engine.\n\n"
+        f"👋 Hi {name}, I'm *{_s.app_name}* — your document compliance assistant.\n\n"
         f"You'll receive document compliance notifications here.\n\n"
         f"Your Chat ID is: `{chat_id}`\n"
-        f"Share it with Luca to be added to the system.",
+        f"Share it with your admin to be added to the notification system.",
         parse_mode="Markdown",
     )
     log.info("/start — user=%s chat_id=%d", name, chat_id)
@@ -68,6 +69,7 @@ async def _run_executor(run_id: int, chat_id: int, context: ContextTypes.DEFAULT
             icon = "✅" if r["success"] else "❌"
             msg += f"{icon} {_esc(r['finding'])}\n"
 
+
     await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
 
 
@@ -77,7 +79,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         err_text = f"{type(context.error).__name__}: {context.error}"
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=f"❌ Internal DAVE error\n{err_text[:200]}",
+            text=f"❌ Internal error\n{err_text[:200]}",
         )
 
 
@@ -98,7 +100,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         update_run_status(int(run_id), "pending_fix")
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
-            f"✅ *DAVE is applying fixes...*\n"
+            f"✅ *Applying fixes...*\n"
             f"Run #{run_id} · requested by {user}",
             parse_mode="Markdown",
         )
@@ -111,7 +113,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
             f"✏️ Marked as *pending manual fix*.\n"
-            f"DAVE will remind you in 48h if unresolved. (Run #{run_id})",
+            f"Reminder will follow in 48h if unresolved. (Run #{run_id})",
             parse_mode="Markdown",
         )
 
@@ -183,7 +185,7 @@ def start_bot_background() -> None:
             async with app:
                 await app.start()
                 await app.updater.start_polling(drop_pending_updates=True)
-                log.info("DAVE bot arrancando — @DAVEValidatorBot")
+                log.info("Compliance bot started")
                 await asyncio.Event().wait()
 
         loop = asyncio.new_event_loop()
@@ -202,13 +204,13 @@ def start_bot_background() -> None:
 
 def main() -> None:
     if not BOT_TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN no configurado")
+        raise RuntimeError("TELEGRAM_BOT_TOKEN not configured")
 
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    log.info("DAVE bot arrancando — @DAVEValidatorBot")
+    log.info("Compliance bot started")
     app.run_polling(drop_pending_updates=True)
 
 

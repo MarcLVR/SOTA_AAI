@@ -325,7 +325,7 @@ def inspect(file_path: str, show_text: bool = True, as_json: bool = False) -> No
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Inspect a single document through the DAVE audit pipeline.",
+        description="Inspect a single document through the audit pipeline.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

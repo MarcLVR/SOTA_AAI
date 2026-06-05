@@ -1,6 +1,6 @@
 # Retired Standards & Obsolete Content Markers
 
-DAVE flags documents that reference frameworks, regulations, or software versions
+The auditor flags documents that reference frameworks, regulations, or software versions
 that have been superseded, and documents that still contain draft/placeholder
 markers. Referencing a retired standard is a compliance and quality risk: the
 document is giving guidance that no longer matches the current requirement.

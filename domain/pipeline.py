@@ -13,16 +13,15 @@ from pathlib import Path
 
 # ── Regex patterns (PII + compliance) ─────────────────────────────────────────
 
-_DNI_RE    = re.compile(r'\b\d{8}[A-Z]\b')
 _PHONE_RE  = re.compile(
-    r'(\+34\s?\d{3}\s?\d{3}\s?\d{3}|\+1\s?\d{3}\s?\d{3}\s?\d{4}|\b6\d{2}\s?\d{3}\s?\d{3}\b)'
+    r'(\+\d{1,3}\s?\d[\d\s\-]{6,14}\d)'
 )
 _EMAIL_RE  = re.compile(
     r'\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+-internal\.com\b|'
     r'\b[a-zA-Z0-9._%+\-]+@gmail\.com\b'
 )
 _TBD_RE    = re.compile(
-    r'\b(TBD|TODO|pendiente|PENDIENTE|a completar|\[TBD\]|\[INSERT[^\]]+\]|\[PENDING[^\]]+\])\b'
+    r'\b(TBD|TODO|\[TBD\]|\[INSERT[^\]]+\]|\[PENDING[^\]]+\])\b'
 )
 _NAMING_RE = re.compile(r'(FINAL|final|_v\d+|_V\d+)')
 
@@ -34,30 +33,21 @@ def mini_critic(doc: dict) -> list[dict]:
     text = doc["text"] + "\n" + (doc.get("notes") or "")
     findings = []
 
-    for m in _DNI_RE.finditer(text):
-        findings.append({
-            "rule_code":    "pii_dni",
-            "title":        f"PII expuesta: DNI encontrado ({m.group()})",
-            "location":     _locate(text, m.start(), doc),
-            "suggestion":   'Reemplazar con "[DNI ANONIMIZADO]" según estándar GDPR',
-            "severity":     "high",
-        })
-
     for m in _EMAIL_RE.finditer(text):
         findings.append({
             "rule_code":    "pii_email",
-            "title":        f"PII expuesta: email corporativo ({m.group()})",
+            "title":        f"Exposed PII: email address found ({m.group()})",
             "location":     _locate(text, m.start(), doc),
-            "suggestion":   "Eliminar o anonimizar direcciones de email en documentos compartibles",
+            "suggestion":   "Remove or anonymize email addresses in shareable documents.",
             "severity":     "high",
         })
 
     for m in _PHONE_RE.finditer(text):
         findings.append({
             "rule_code":    "pii_phone",
-            "title":        f"PII expuesta: número de teléfono ({m.group().strip()})",
+            "title":        f"Exposed PII: phone number found ({m.group().strip()})",
             "location":     _locate(text, m.start(), doc),
-            "suggestion":   "Eliminar número de teléfono del documento",
+            "suggestion":   "Remove phone numbers from the document.",
             "severity":     "medium",
         })
 
@@ -65,9 +55,9 @@ def mini_critic(doc: dict) -> list[dict]:
     if tbds:
         findings.append({
             "rule_code":    "placeholder_values",
-            "title":        f"Valores placeholder detectados: {', '.join(sorted(tbds)[:4])}",
-            "location":     "Múltiples secciones del documento",
-            "suggestion":   "Completar todos los campos TBD/TODO/pendiente antes de distribuir",
+            "title":        f"Placeholder values detected: {', '.join(sorted(tbds)[:4])}",
+            "location":     "Multiple document sections",
+            "suggestion":   "Complete all TBD/TODO/placeholder fields before distributing.",
             "severity":     "medium",
         })
 
@@ -78,9 +68,9 @@ def mini_critic(doc: dict) -> list[dict]:
     ):
         findings.append({
             "rule_code":    "naming_convention",
-            "title":        f"Naming convention incorrecto: '{fname}'",
-            "location":     "Nombre del fichero",
-            "suggestion":   "Renombrar siguiendo el estándar YYYY-MM-DD_tipo_nombre",
+            "title":        f"Incorrect naming convention: '{fname}'",
+            "location":     "Filename",
+            "suggestion":   "Rename following the YYYY-MM-DD_type_name standard.",
             "severity":     "low",
         })
 
@@ -90,15 +80,15 @@ def mini_critic(doc: dict) -> list[dict]:
 def _locate(text: str, pos: int, doc: dict) -> str:
     for s in doc.get("sections", []):
         if s["heading"] and s["heading"] in text[max(0, pos - 300):pos + 300]:
-            return f'Sección "{s["heading"]}"'
+            return f'Section "{s["heading"]}"'
     if doc.get("notes") and pos >= len(doc["text"]):
-        return "Speaker notes (no visibles en el documento)"
-    return "Cuerpo del documento"
+        return "Speaker notes (not visible in document)"
+    return "Document body"
 
 
 # ── Single-document pipeline ───────────────────────────────────────────────────
 
-def run_document_pipeline(doc_path: str, owner: str = "luca") -> dict:
+def run_document_pipeline(doc_path: str, owner: str = "") -> dict:
     """
     Run connector → mini_critic → DB → Telegram for one document.
     Returns {"run_id", "findings_count", "notified", "error"}.
@@ -158,7 +148,7 @@ def _pipeline_from_doc(doc: dict, owner: str) -> dict:
     return {"run_id": run_id, "findings_count": len(findings), "notified": sent, "error": None}
 
 
-def run_audit_pipeline(document_results: list[dict], default_owner: str = "luca") -> dict:
+def run_audit_pipeline(document_results: list[dict], default_owner: str = "") -> dict:
     """
     Run the full pipeline for all documents flagged as needing supervision.
 
@@ -223,7 +213,9 @@ def _resolve_owner(doc: dict, default: str) -> str:
     if not author:
         return default
     author_lower = author.lower()
-    for name in ("luca", "nacho", "marc", "augusto"):
+    from config import settings as _settings
+    owner_list = [o.strip() for o in _settings.owner_usernames.split(",") if o.strip()]
+    for name in owner_list:
         if name in author_lower:
             return name
     return default

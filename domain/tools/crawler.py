@@ -35,8 +35,6 @@ SUPPORTED_EXTENSIONS: set[str] = {
 _SKIP_DIRS: set[str] = {
     ".git", ".venv", "__pycache__", "node_modules", ".mypy_cache",
     ".pytest_cache", ".tox", "dist", "build", ".eggs",
-    # Cloud-sync temp directories — never contain auditable documents
-    "OneDriveTemp", "OneDriveCloudTemp",
 }
 
 # Exact filenames to skip (lowercased for comparison)

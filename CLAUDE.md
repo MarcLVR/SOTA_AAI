@@ -31,8 +31,8 @@ Copy `.env.example` to `.env`. The most critical settings:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `LLM_PROVIDER` | `gemini` | Default provider: `gemini`, `groq`, `ollama` |
-| `GOOGLE_API_KEY` | — | Required when `LLM_PROVIDER=gemini` |
+| `LLM_PROVIDER` | `anthropic` | Default provider: `anthropic`, `groq`, `ollama` |
+| `ANTHROPIC_API_KEY` | — | Required when `LLM_PROVIDER=anthropic` |
 | `GROQ_API_KEY` | — | Required when `LLM_PROVIDER=groq` |
 | `OLLAMA_MODEL` | `llama3.2` | Model name when using Ollama |
 | `MAX_SUPERVISOR_ROUNDS` | `5` | Hard cap on routing loops |

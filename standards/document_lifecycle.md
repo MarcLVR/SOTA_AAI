@@ -1,7 +1,7 @@
 # Document Lifecycle & Staleness Standard
 
 This standard defines how long each type of corporate document stays valid before
-it must be reviewed, and when a document is considered stale. DAVE flags documents
+it must be reviewed, and when a document is considered stale. The auditor flags documents
 that exceed these thresholds. Dates are measured from the document's last-modified
 or last-reviewed date.
 
@@ -35,4 +35,4 @@ access is an additional staleness signal independent of the age thresholds above
 
 - Record a real **last-reviewed** or **effective date** on every document.
 - Schedule reviews at or before the thresholds in the table.
-- Archive cold documents instead of leaving them in active SharePoint folders.
+- Archive cold documents instead of leaving them in active folders.

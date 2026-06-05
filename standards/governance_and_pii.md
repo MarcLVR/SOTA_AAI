@@ -36,7 +36,7 @@ classification that still protects the content; do not over-classify routine doc
 
 ## Personal data (PII) — GDPR
 
-Documents shared on SharePoint or in shared folders **must not** expose raw personal
+Documents shared in repositories or shared folders **must not** expose raw personal
 data unless they are classified `restricted` or `secret` and access is controlled.
 The following must be redacted or anonymised in documents intended for wide sharing:
 

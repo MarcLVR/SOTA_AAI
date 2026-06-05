@@ -1,6 +1,6 @@
 # Required Sections by Document Type
 
-Each document type must contain a defined set of sections. DAVE checks the document
+Each document type must contain a defined set of sections. The auditor checks the document
 text for these section headings; missing sections lower the **standards compliance**
 dimension of the trust score and produce a finding naming the missing sections.
 

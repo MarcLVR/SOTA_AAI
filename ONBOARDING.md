@@ -127,9 +127,9 @@ nano .env
 Minimum required — choose one LLM provider:
 
 ```env
-# Option 1: Gemini (recommended — free tier, no local GPU needed)
-LLM_PROVIDER=gemini
-GOOGLE_API_KEY=your-key-from-aistudio.google.com
+# Option 1: Anthropic (default)
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=your-key-from-console.anthropic.com
 
 # Option 2: Groq (free tier, ultra-fast)
 LLM_PROVIDER=groq
@@ -237,7 +237,7 @@ corpus dashboard.
 
 ```
 "Audit the documents in /path/to/folder for AI-readiness"
-"Which files in my SharePoint export need supervision?"
+"Which files in my document repository need supervision?"
 "Check domain/demo_corpus/files and tell me the top offenders"
 "Inspect this single contract for governance gaps: contracts/nda_2019.docx"
 ```
@@ -468,7 +468,7 @@ Zero-dependency persistence. Swap to `langgraph-checkpoint-postgres` for product
 - [ ] Multi-turn HITL (back-and-forth revision loop)
 - [ ] LangGraph Studio visual debugger integration
 - [ ] PDF generation for audit reports
-- [ ] SharePoint / OneDrive connector for real-corpus audits
+- [ ] Cloud storage connector for real-corpus audits
 
 ---
 

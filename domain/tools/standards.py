@@ -27,12 +27,18 @@ _EMPTY_TEXT_PENALTY   = 0.75   # no text in a text-expected format → forces sc
 _BRAND_PENALTY        = 0.05   # per distinct brand-name misuse
 
 # Matches the brand name case-insensitively, with an optional plural "es".
-# The possessive ("OmniAccess's") is deliberately not captured → not flagged.
-_BRAND_NAME_RE = re.compile(rf"\b{BRAND_CANONICAL_NAME}(es)?\b", re.IGNORECASE)
+# The possessive ("BrandName's") is deliberately not captured → not flagged.
+# When BRAND_CANONICAL_NAME is empty, brand checking is disabled.
+_BRAND_NAME_RE = (
+    re.compile(rf"\b{re.escape(BRAND_CANONICAL_NAME)}(es)?\b", re.IGNORECASE)
+    if BRAND_CANONICAL_NAME else None
+)
 
 
 def _check_brand_name(text: str) -> list[str]:
     """Flag occurrences of the brand name whose exact spelling is not canonical."""
+    if not _BRAND_NAME_RE or not BRAND_CANONICAL_NAME:
+        return []
     findings: list[str] = []
     seen: set[str] = set()
     plural = (BRAND_CANONICAL_NAME + "es").lower()
@@ -49,7 +55,7 @@ def _check_brand_name(text: str) -> list[str]:
         else:
             findings.append(
                 f"Incorrect brand name usage '{token}': write the brand exactly as "
-                f"'{BRAND_CANONICAL_NAME}' (capital O and A, lower-case rest)."
+                f"'{BRAND_CANONICAL_NAME}'."
             )
     return findings
 

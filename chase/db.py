@@ -1,5 +1,5 @@
 """
-Database layer for DAVE — matches the real schema created by Nacho.
+Database layer — schema for the document audit pipeline.
 
 Tables:
   validation_runs(id, doc_name, doc_type, doc_path, started_at, finished_at,
@@ -19,8 +19,8 @@ def _conn():
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "localhost"),   # "postgres" only resolves inside Docker
         port=int(os.getenv("DB_PORT", 5432)),
-        dbname=os.getenv("DB_NAME", "dave"),
-        user=os.getenv("DB_USER", "dave"),
+        dbname=os.getenv("DB_NAME", "audit"),
+        user=os.getenv("DB_USER", "audit"),
         password=os.getenv("DB_PASSWORD", ""),
         connect_timeout=3,                         # fail fast — never hang the UI
     )

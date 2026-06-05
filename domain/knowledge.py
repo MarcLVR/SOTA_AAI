@@ -66,12 +66,12 @@ OBSOLETE_CONTENT_MARKERS: list[str] = [
 
 
 # ── Brand name usage ──────────────────────────────────────────────────────────
-# Canonical spelling of the company/brand name (OmniAccess style guide). Any token
-# matching it case-insensitively but not exactly — wrong casing ("OMNIACCESS",
-# "Omniaccess", "omniaccess") or a pluralised form ("OmniAccesses") — is a branding
-# violation. The possessive ("OmniAccess's") is allowed. Detection lives in
-# tools/standards.py; this is the single tunable fact.
-BRAND_CANONICAL_NAME: str = "OmniAccess"
+# Canonical spelling of the company/brand name. Any token matching it
+# case-insensitively but not exactly is flagged as a branding violation.
+# Set via BRAND_NAME env var; empty string disables brand checking entirely.
+# Detection lives in tools/standards.py; this is the single tunable fact.
+from config import settings as _settings
+BRAND_CANONICAL_NAME: str = _settings.brand_name
 
 
 # ── Required sections per doc type ────────────────────────────────────────────
@@ -105,14 +105,14 @@ VALID_CLASSIFICATIONS: set[str] = {
 
 # ── Doc-type detection from filename ─────────────────────────────────────────
 DOCTYPE_FILENAME_HINTS: dict[str, list[str]] = {
-    "policy":          ["policy", "politica", "política"],
-    "procedure":       ["procedure", "sop", "procedimiento"],
-    "contract":        ["contract", "agreement", "contrato", "nda", "msa"],
-    "data_dictionary": ["data dictionary", "data_dictionary", "diccionario"],
+    "policy":          ["policy"],
+    "procedure":       ["procedure", "sop"],
+    "contract":        ["contract", "agreement", "nda", "msa"],
+    "data_dictionary": ["data dictionary", "data_dictionary"],
     "data_contract":   ["data contract", "data_contract"],
-    "project_charter": ["charter", "acta de proyecto"],
-    "status_report":   ["status", "weekly", "report", "informe"],
-    "raid_log":        ["raid", "risk log", "riesgos"],
+    "project_charter": ["charter"],
+    "status_report":   ["status", "weekly", "report"],
+    "raid_log":        ["raid", "risk log"],
     "okr":             ["okr", "objectives"],
     "asana_task":      ["asana", "task_export"],
     "bc_record":       ["business central", "bc_", "navision", "dynamics"],
