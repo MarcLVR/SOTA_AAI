@@ -32,3 +32,7 @@ class AgentState(TypedDict):
 
     # ── Human-in-the-loop ─────────────────────────────────────────────────────
     hitl_required: bool       # whether HITL check is triggered before FINISH
+
+    # ── Permissions ───────────────────────────────────────────────────────────
+    role:     str   # active role for this session: viewer | analyst | admin
+    identity: str   # caller identity for rate-limit tracking (api_key or "ui")

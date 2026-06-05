@@ -105,6 +105,33 @@ Valid roles: `supervisor` `researcher` `coder` `general` `auditor` `critic` `exe
 | `DEFAULT_OWNER` | _(empty)_ | Fallback owner when doc author cannot be resolved |
 | `OWNER_USERNAMES` | _(empty)_ | Comma-separated owner usernames, e.g. `alice,bob` |
 
+### Permissions
+
+Three built-in roles applied per session or per API key:
+
+| Role | Agents | Audit | Upload | Code | Rate limit |
+|---|---|---|---|---|---|
+| `viewer` | general | ❌ | ❌ | ❌ | 10 req/60 s |
+| `analyst` | general, researcher, auditor | ✅ | ✅ | ❌ | 30 req/60 s |
+| `admin` | all | ✅ | ✅ | ✅ | 120 req/60 s |
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ACTIVE_ROLE` | `admin` | Role applied to all UI sessions |
+| `PERMISSION_KEYS` | `{}` | JSON dict mapping API key → role, e.g. `{"sk-abc":"analyst"}` |
+
+### MCP servers
+
+The local filesystem server is always active. Remote HTTP servers are added via `MCP_HTTP_SERVERS`:
+
+```env
+MCP_HTTP_SERVERS=[{"name":"my-server","transport":"streamable_http","url":"https://example.com/mcp","headers":{"Authorization":"Bearer sk-..."}}]
+```
+
+Supported transports: `stdio` · `sse` · `streamable_http`
+
+MCP elicitation requests (mid-tool-call form input or URL flows) are routed to a panel in the UI — the tool call blocks until the user responds or the 120 s timeout fires.
+
 ### Integrations (all optional)
 
 | Variable | Notes |
@@ -150,7 +177,7 @@ python -m eval.rag_eval            # RAGAS metrics
 │   └── demo_corpus/          # 42-file synthetic corpus generator
 ├── standards/                # 6 markdown governance docs (RAG + semantic layer)
 ├── memory/                   # ChromaDB (RAG) + Mem0 (episodic)
-├── guardrails/               # injection detection + PII redaction
+├── guardrails/               # injection detection, PII redaction, RBAC permissions, MCP elicitation bridge
 ├── chase/                    # Telegram bot + Postgres notifier (auto-starts when configured)
 ├── ui/app.py                 # Gradio 4-tab dashboard
 └── eval/                     # agent routing + RAGAS evals
@@ -167,6 +194,9 @@ python -m eval.rag_eval            # RAGAS metrics
 - [x] Metadata consistency check (author, never-revised, body-date skew)
 - [x] Per-role token caps
 - [x] Owner routing via document author metadata
+- [x] RBAC permission policies with sliding-window rate limiting
+- [x] MCP HTTP transport (`sse` + `streamable_http`) via env config
+- [x] MCP elicitation routed to UI panel (form + URL modes)
 - [ ] Docker Compose (one-command start with Postgres)
 - [ ] PDF report generation
 - [ ] Streaming output from specialist agents

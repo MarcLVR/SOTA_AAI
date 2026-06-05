@@ -14,6 +14,7 @@ from loguru import logger
 from .llm import get_llm
 from config import settings
 from graph.state import AgentState
+from guardrails.permissions import check_agent
 
 MEMBERS = ["researcher", "coder", "general", "auditor"]
 OPTIONS = MEMBERS + ["FINISH"]
@@ -65,6 +66,13 @@ def supervisor_node(state: AgentState) -> dict:
     except Exception as e:
         logger.error(f"[supervisor] structured output failed: {e}. Defaulting to general.")
         decision = SupervisorDecision(next="general", reasoning="Fallback due to parsing error.")
+
+    # Permission check — downgrade to an allowed agent if role forbids the chosen one
+    role = state.get("role", "admin")
+    perm = check_agent(role, decision.next)
+    if not perm.allowed:
+        logger.warning(f"[supervisor] {perm.reason} — routing to 'general' instead.")
+        decision = SupervisorDecision(next="general", reasoning=perm.reason)
 
     return {
         "next_agent": decision.next,

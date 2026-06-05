@@ -22,6 +22,8 @@ from loguru import logger
 from config import settings
 from domain.adapter import audit_and_persist
 from domain.semantic import semantic_check
+from guardrails.permissions import check_action, resolve_role
+from guardrails.elicitation import get_pending, submit_response, decline as decline_elicitation
 from domain.tools.aggregate import human_bytes
 from graph.workflow import build_graph, run_query, resume_after_hitl
 from memory import ingest_documents, get_all_memories
@@ -495,6 +497,10 @@ def _do_audit(target: str, extrapolate: bool, source_label: str) -> tuple:
 
 def run_folder_audit(folder: str, extrapolate: bool) -> tuple:
     """Section 1 handler: scan a local / synced folder. Ignores any uploads."""
+    perm = check_action(resolve_role(), "audit", identity="ui")
+    if not perm.allowed:
+        return (None, [], f"⚠️ {perm.reason}", "", _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
+
     logger.info(f"[run_folder_audit] START folder={folder!r}")
     target = (folder or DEFAULT_FOLDER).strip()
     if not os.path.isdir(target):
@@ -513,6 +519,10 @@ def run_folder_audit(folder: str, extrapolate: bool) -> tuple:
 
 def run_upload_audit(uploaded_files, extrapolate: bool) -> tuple:
     """Section 2 handler: audit only the uploaded file(s). Ignores folder path."""
+    perm = check_action(resolve_role(), "upload", identity="ui")
+    if not perm.allowed:
+        return (None, [], f"⚠️ {perm.reason}", "", _EMPTY_FIG, _EMPTY_FIG, [], "_No data._", "")
+
     logger.info(f"[run_upload_audit] START files={len(uploaded_files) if uploaded_files else 0}")
     if not uploaded_files:
         msg = "⚠️ **Please upload at least one document before scanning.**"
@@ -1158,7 +1168,7 @@ function auditAnimate() {
 """
 
 def build_ui() -> gr.Blocks:
-    with gr.Blocks(title="AI-Readiness Dashboard", js=_DAVE_ANIMATE_JS) as demo:
+    with gr.Blocks(title="AI-Readiness Dashboard") as demo:
 
         gr.Markdown(
             "# AI-Readiness Dashboard\n"
@@ -1307,6 +1317,22 @@ def build_ui() -> gr.Blocks:
                                 reject_btn  = gr.Button("🔁 Reject & revise", variant="secondary")
 
                         warnings_box = gr.Markdown(value="", visible=True)
+
+                        # MCP elicitation panel (shown when a server requests input)
+                        with gr.Group(visible=False) as elicit_row:
+                            gr.Markdown("### 🔌 MCP Server Input Required")
+                            elicit_msg    = gr.Markdown(value="")
+                            elicit_id     = gr.State("")
+                            elicit_mode   = gr.State("form")
+                            elicit_fields = gr.Textbox(
+                                label="Response (JSON key/value pairs or URL confirmation)",
+                                placeholder='{"field_name": "value", ...}',
+                                lines=4,
+                            )
+                            with gr.Row():
+                                elicit_submit_btn  = gr.Button("✅ Submit",  variant="primary")
+                                elicit_decline_btn = gr.Button("🚫 Decline", variant="secondary")
+                        elicit_timer = gr.Timer(value=2)
 
                         with gr.Row():
                             msg_box  = gr.Textbox(
@@ -1468,6 +1494,64 @@ def build_ui() -> gr.Blocks:
         recall_btn.click(show_memories,  inputs=thread_state,   outputs=memory_box)
         upload_btn.click(upload_docs,    inputs=file_upload_rag, outputs=upload_status)
 
+        # MCP elicitation polling + response handlers
+        def _poll_elicitation():
+            pending = get_pending()
+            if not pending:
+                return (
+                    gr.update(visible=False), "", "", "form", "",
+                )
+            req = pending[0]
+            if req.mode == "form":
+                props = req.schema.get("properties", req.schema)
+                field_hints = "\n".join(
+                    f'  "{k}": ""   # {v.get("description", v.get("type", ""))} '
+                    for k, v in props.items()
+                ) if props else ""
+                placeholder = "{\n" + field_hints + "\n}" if field_hints else "{}"
+            else:
+                placeholder = f"Visit this URL and click Submit when done:\n{req.url}"
+            msg_md = f"**{req.message}**"
+            return (
+                gr.update(visible=True),
+                msg_md,
+                req.request_id,
+                req.mode,
+                placeholder,
+            )
+
+        elicit_timer.tick(
+            _poll_elicitation,
+            outputs=[elicit_row, elicit_msg, elicit_id, elicit_mode, elicit_fields],
+        )
+
+        def _submit_elicitation(request_id, raw_fields, mode):
+            import json
+            if mode == "url":
+                submit_response(request_id, {})
+            else:
+                try:
+                    data = json.loads(raw_fields) if raw_fields.strip() else {}
+                except json.JSONDecodeError:
+                    data = {"value": raw_fields}
+                submit_response(request_id, data)
+            return gr.update(visible=False), "", ""
+
+        def _decline_elicitation(request_id):
+            decline_elicitation(request_id)
+            return gr.update(visible=False), "", ""
+
+        elicit_submit_btn.click(
+            _submit_elicitation,
+            inputs=[elicit_id, elicit_fields, elicit_mode],
+            outputs=[elicit_row, elicit_msg, elicit_fields],
+        )
+        elicit_decline_btn.click(
+            _decline_elicitation,
+            inputs=[elicit_id],
+            outputs=[elicit_row, elicit_msg, elicit_fields],
+        )
+
         # Tab 4 — Analytics
         _analytics_outputs = [
             analytics_savings,
@@ -1490,4 +1574,4 @@ def build_ui() -> gr.Blocks:
 
 
 if __name__ == "__main__":
-    build_ui().launch(server_name="0.0.0.0", server_port=7860)
+    build_ui().launch(server_name="0.0.0.0", server_port=7860, js=_DAVE_ANIMATE_JS)

@@ -48,6 +48,7 @@ from agents import (
 from agents.critic import critic_node, route_after_critic
 from config import settings
 from guardrails import input_guard, output_guard
+from guardrails.permissions import check_rate_limit, check_agent, resolve_role
 from memory import remember, recall
 
 
@@ -61,21 +62,33 @@ def guardrail_in_node(state: AgentState) -> dict:
     if last_human is None:
         return {}
 
+    # Resolve role and identity for this session
+    role     = state.get("role")     or resolve_role()
+    identity = state.get("identity") or "ui"
+
+    # Rate limit check
+    rl = check_rate_limit(role, identity)
+    if not rl.allowed:
+        logger.warning(f"[guardrail_in] rate limit: {rl.reason}")
+        return {
+            "messages": [AIMessage(content=f"⚠️ {rl.reason}")],
+            "next_agent": "FINISH",
+        }
+
+    # Content validation (injection detection + PII redaction)
     result = input_guard(last_human.content)
     if not result.passed:
         logger.warning(f"[guardrail_in] blocked: {result.reason}")
-        # Inject a synthetic AI refusal so the graph can exit cleanly
         return {
             "messages": [AIMessage(content=f"⚠️ Request blocked: {result.reason}")],
             "next_agent": "FINISH",
         }
 
-    # Warn but allow if PII was redacted
     if result.warnings:
         for w in result.warnings:
             logger.warning(f"[guardrail_in] {w}")
 
-    return {}   # pass through unchanged
+    return {"role": role, "identity": identity}
 
 
 # ── Specialist agent node factory ─────────────────────────────────────────────

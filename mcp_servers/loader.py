@@ -17,10 +17,13 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator, List
 
 from langchain_core.tools import BaseTool
-from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.client import Callbacks, MultiServerMCPClient
 from loguru import logger
 
 from .config import MCP_SERVERS
+from guardrails.elicitation import elicitation_callback
+
+_CALLBACKS = Callbacks(on_elicitation=elicitation_callback)
 
 
 @asynccontextmanager
@@ -43,7 +46,7 @@ async def load_mcp_tools(
         return
 
     logger.info(f"Starting MCP servers: {list(servers.keys())}")
-    client = MultiServerMCPClient(servers)
+    client = MultiServerMCPClient(servers, callbacks=_CALLBACKS)
 
     try:
         tools = await client.get_tools()
@@ -69,7 +72,7 @@ def get_mcp_tools_sync(server_names: List[str] | None = None) -> List[BaseTool]:
     if not servers:
         return []
 
-    client = MultiServerMCPClient(servers)
+    client = MultiServerMCPClient(servers, callbacks=_CALLBACKS)
 
     async def _load():
         return await client.get_tools()

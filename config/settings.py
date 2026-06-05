@@ -45,6 +45,10 @@ class Settings(BaseSettings):
 
     # ── MCP ───────────────────────────────────────────────────────────────────
     mcp_filesystem_root: str = "./data/uploads"
+    # JSON list of remote HTTP MCP servers, e.g.:
+    # [{"name":"my-server","transport":"streamable_http","url":"https://...","headers":{"Authorization":"Bearer sk-..."}}]
+    # Supported transports: "sse" | "streamable_http"
+    mcp_http_servers: str = "[]"
 
     # ── Observability ─────────────────────────────────────────────────────────
     langfuse_public_key: str | None = None
@@ -67,6 +71,10 @@ class Settings(BaseSettings):
     # ── Guardrails ────────────────────────────────────────────────────────────
     guardrail_max_input_length: int = 8000
     guardrail_redact_pii: bool = True
+
+    # ── Permissions ───────────────────────────────────────────────────────────
+    active_role: str = "admin"          # default role: viewer | analyst | admin
+    permission_keys: str = "{}"         # JSON dict mapping api_key → role
 
     @property
     def chroma_path(self) -> Path:
