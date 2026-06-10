@@ -1,14 +1,19 @@
 """
-Agent eval harness — tests routing accuracy and end-to-end response quality.
+Agent eval harness — tests routing, end-to-end answers, and agent trajectory.
 
-Two test modes:
-  1. Routing eval  : given a query, does the supervisor route to the expected agent?
-  2. E2E eval      : run a query through the full graph and score the response.
+Three test modes:
+  1. Routing eval     : given a query, does the supervisor route to the expected agent?
+  2. E2E eval         : run a query through the full graph and score the response.
+  3. Trajectory eval  : run the full graph and assert on the *process*, not just the
+                        answer — which nodes executed and which tools were called.
+                        (Answer-quality metrics alone can't catch an agent that
+                        guesses correctly without using the tool it should have.)
 
 Usage:
-    python -m eval.agent_eval               # runs all tests
-    python -m eval.agent_eval --routing     # routing tests only
-    python -m eval.agent_eval --e2e         # e2e tests only
+    python -m eval.agent_eval                  # runs all tests
+    python -m eval.agent_eval --routing        # routing tests only
+    python -m eval.agent_eval --e2e            # e2e tests only
+    python -m eval.agent_eval --trajectory     # trajectory + tool-call tests only
 
 Output: eval/results/agent_eval.json
 """
@@ -35,6 +40,15 @@ class E2ETestCase:
     query: str
     expected_keywords: list[str]   # response must contain ALL of these
     forbidden_keywords: list[str] = field(default_factory=list)
+    description: str = ""
+
+
+@dataclass
+class TrajectoryTestCase:
+    query: str
+    expected_nodes: list[str]      # graph nodes that MUST appear (in order, as a subsequence)
+    expected_tools: list[str] = field(default_factory=list)   # tools that MUST be called
+    forbidden_tools: list[str] = field(default_factory=list)  # tools that must NOT be called
     description: str = ""
 
 
@@ -207,6 +221,136 @@ def run_e2e_eval() -> dict:
     }
 
 
+# ── Trajectory + tool-call eval ─────────────────────────────────────────────────
+
+TRAJECTORY_TESTS: list[TrajectoryTestCase] = [
+    TrajectoryTestCase(
+        query="Execute this code and tell me the output: print(sum(range(100)))",
+        expected_nodes=["supervisor", "coder"],
+        expected_tools=["python_repl"],
+        description="Code execution must route to coder AND actually run python_repl",
+    ),
+    TrajectoryTestCase(
+        query="Search the web for the current stable version of Python",
+        expected_nodes=["supervisor", "researcher"],
+        expected_tools=["web_search"],
+        description="Web lookup must route to researcher AND call web_search",
+    ),
+    TrajectoryTestCase(
+        query="List the files in the uploads directory",
+        expected_nodes=["supervisor"],
+        expected_tools=["list_files"],
+        description="File listing must invoke the list_files tool",
+    ),
+]
+
+
+def _is_subsequence(needles: list[str], haystack: list[str]) -> bool:
+    """True if `needles` appears in `haystack` in order (gaps allowed)."""
+    it = iter(haystack)
+    return all(n in it for n in needles)
+
+
+def _capture_run(graph, query: str, thread_id: str) -> tuple[list[str], set[str]]:
+    """Stream the graph and capture (top-level node trajectory, set of tools called).
+
+    Tool calls happen inside the ReAct specialist subgraphs and are dropped from
+    top-level state (the node persists only the final message). subgraphs=True
+    surfaces those inner steps so we can see the actual tool invocations.
+    """
+    from langchain_core.messages import HumanMessage, ToolMessage
+    from observability import get_callbacks
+
+    initial_state = {
+        "messages": [HumanMessage(content=query)],
+        "next_agent": "", "reasoning": "", "last_specialist": "",
+        "supervisor_rounds": 0, "critique": "", "critique_score": 0.0,
+        "should_revise": False, "revision_count": 0, "retrieved_context": "",
+        "hitl_required": False,
+    }
+    config = {"configurable": {"thread_id": thread_id}, "callbacks": get_callbacks()}
+
+    trajectory: list[str] = []
+    tools_called: set[str] = set()
+
+    for ns, update in graph.stream(
+        initial_state, config=config, stream_mode="updates", subgraphs=True
+    ):
+        is_top = len(ns) == 0
+        if not isinstance(update, dict):
+            continue
+        for node, delta in update.items():
+            if is_top:
+                trajectory.append(node)
+            if not isinstance(delta, dict):
+                continue
+            msgs = delta.get("messages", [])
+            if not isinstance(msgs, list):
+                msgs = [msgs]
+            for m in msgs:
+                for tc in (getattr(m, "tool_calls", None) or []):
+                    name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+                    if name:
+                        tools_called.add(name)
+                if isinstance(m, ToolMessage) and getattr(m, "name", None):
+                    tools_called.add(m.name)
+
+    return trajectory, tools_called
+
+
+def run_trajectory_eval() -> dict:
+    """Assert on the agent's process: node trajectory and tool-call correctness."""
+    from graph.workflow import build_graph
+
+    graph = build_graph()
+    results = []
+    correct = 0
+
+    for tc in TRAJECTORY_TESTS:
+        try:
+            trajectory, tools = _capture_run(graph, tc.query, thread_id=f"traj-{hash(tc.query)}")
+
+            nodes_ok = _is_subsequence(tc.expected_nodes, trajectory)
+            tools_ok = all(t in tools for t in tc.expected_tools)
+            no_forbidden = not any(t in tools for t in tc.forbidden_tools)
+            passed = nodes_ok and tools_ok and no_forbidden
+            if passed:
+                correct += 1
+
+            logger.info(
+                f"[trajectory_eval] {'✓' if passed else '✗'} {tc.description} | "
+                f"nodes={trajectory} tools={sorted(tools)}"
+            )
+            results.append({
+                "query": tc.query,
+                "passed": passed,
+                "trajectory": trajectory,
+                "tools_called": sorted(tools),
+                "expected_nodes": tc.expected_nodes,
+                "expected_tools": tc.expected_tools,
+                "nodes_ok": nodes_ok,
+                "tools_ok": tools_ok,
+                "no_forbidden": no_forbidden,
+                "description": tc.description,
+            })
+        except Exception as e:
+            logger.error(f"[trajectory_eval] error: {e}")
+            results.append({
+                "query": tc.query, "passed": False, "error": str(e),
+                "description": tc.description,
+            })
+
+    accuracy = correct / len(TRAJECTORY_TESTS) if TRAJECTORY_TESTS else 0.0
+    logger.info(f"[trajectory_eval] accuracy = {accuracy:.0%} ({correct}/{len(TRAJECTORY_TESTS)})")
+
+    return {
+        "accuracy": accuracy,
+        "correct": correct,
+        "total": len(TRAJECTORY_TESTS),
+        "cases": results,
+    }
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -215,10 +359,11 @@ def main():
     parser = argparse.ArgumentParser(description="Agent eval harness")
     parser.add_argument("--routing", action="store_true")
     parser.add_argument("--e2e", action="store_true")
+    parser.add_argument("--trajectory", action="store_true")
     parser.add_argument("--output", default="eval/results/agent_eval.json")
     args = parser.parse_args()
 
-    run_all = not args.routing and not args.e2e
+    run_all = not args.routing and not args.e2e and not args.trajectory
 
     report: dict = {}
 
@@ -229,6 +374,10 @@ def main():
     if args.e2e or run_all:
         logger.info("=== E2E eval ===")
         report["e2e"] = run_e2e_eval()
+
+    if args.trajectory or run_all:
+        logger.info("=== Trajectory eval ===")
+        report["trajectory"] = run_trajectory_eval()
 
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:
