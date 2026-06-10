@@ -111,9 +111,10 @@ def critic_node(state: AgentState) -> dict:
     llm = get_llm(role="critic")
     structured_llm = llm.with_structured_output(CriticDecision)
 
+    from graph.compaction import compact_messages
     messages = [
         SystemMessage(content=CRITIC_PROMPT),
-        *state["messages"],
+        *compact_messages(state["messages"]),
     ]
 
     try:

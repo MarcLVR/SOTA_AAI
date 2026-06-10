@@ -47,6 +47,7 @@ from agents import (
 )
 from agents.critic import critic_node, route_after_critic
 from agents.resilience import resilient_invoke
+from graph.compaction import compact_messages
 from config import settings
 from guardrails import input_guard, output_guard
 from guardrails.permissions import check_rate_limit, check_agent, resolve_role
@@ -97,7 +98,8 @@ def guardrail_in_node(state: AgentState) -> dict:
 def _make_agent_node(agent, name: str):
     """Wrap a create_react_agent into a LangGraph node that also injects critique."""
     def node(state: AgentState) -> dict:
-        messages = list(state["messages"])
+        # Bound the history so long resumed threads don't overflow the context window.
+        messages = compact_messages(state["messages"])
 
         # Inject critique as a human follow-up on revision passes.
         # Must be HumanMessage — Claude rejects multiple non-consecutive SystemMessages.

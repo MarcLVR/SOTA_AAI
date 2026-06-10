@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2          # extra attempts on transient errors (total = 1 + this)
     llm_retry_max_wait: float = 8.0   # cap on exponential backoff between retries (seconds)
 
+    # ── Context compaction (long-thread protection) ────────────────────────────
+    context_max_messages: int = 24    # compact when a thread's history exceeds this many messages
+    context_keep_last: int = 10       # most-recent messages always kept verbatim
+    context_summarize: bool = False   # True → summarise dropped messages with one LLM call
+
     # ── Reflection ────────────────────────────────────────────────────────────
     critic_enabled: bool = False               # set CRITIC_ENABLED=true to enable Reflexion
     critic_revision_threshold: float = 0.70   # below this score → revise
