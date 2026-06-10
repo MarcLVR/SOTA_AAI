@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
+from pydantic import BaseModel, Field
 from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
@@ -120,29 +121,114 @@ def get_retriever(k: int | None = None):
     )
 
 
+# ── Agentic retrieval: grade → (rewrite + re-retrieve) → cite ──────────────────
+
+def _citation(doc: Document, score: float | None) -> str:
+    """Stable, structured citation header for a chunk."""
+    src   = doc.metadata.get("filename", "unknown")
+    start = doc.metadata.get("start_index")
+    loc   = f"@{start}" if start is not None else ""
+    sc    = f" dist={score:.3f}" if score is not None else ""   # vector distance, lower = closer
+    return f"Source: {src}{loc}{sc}"
+
+
+class _GradeResult(BaseModel):
+    """CRAG-style grading of a retrieved candidate set."""
+    relevant_indices: list[int] = Field(
+        default_factory=list,
+        description="1-based indices of chunks that actually help answer the query",
+    )
+    sufficient: bool = Field(
+        default=True,
+        description="True if the relevant chunks are enough to answer the query",
+    )
+    rewrite: str = Field(
+        default="",
+        description="A better search query to try if the chunks are insufficient (else empty)",
+    )
+
+
+_GRADER_PROMPT = (
+    "You grade retrieved document chunks for a RAG system. Given the user query and "
+    "numbered chunks, return: the 1-based indices of chunks that genuinely help answer "
+    "the query (drop off-topic ones), whether they are SUFFICIENT to answer, and — only "
+    "if insufficient — a single improved search query.\n\nQuery: {query}\n\nChunks:\n{chunks}"
+)
+
+
+def _grade(query: str, docs: list[Document]) -> _GradeResult:
+    """Best-effort LLM relevance grading. Degrades to 'keep all' on any failure."""
+    from agents.llm import get_llm
+    from agents.resilience import resilient_invoke
+
+    numbered = "\n\n".join(f"[{i}] {d.page_content[:600]}" for i, d in enumerate(docs, 1))
+    prompt = _GRADER_PROMPT.format(query=query, chunks=numbered)
+    try:
+        grader = get_llm(role="critic").with_structured_output(_GradeResult)
+        res: _GradeResult = resilient_invoke(grader, prompt, label="rag-grader")
+        # Keep only valid indices; if the grader returned nothing usable, keep all.
+        res.relevant_indices = [i for i in res.relevant_indices if 1 <= i <= len(docs)]
+        if not res.relevant_indices:
+            res.relevant_indices = list(range(1, len(docs) + 1))
+        return res
+    except Exception as e:
+        logger.warning(f"[retrieve_from_memory] grading skipped: {e}")
+        return _GradeResult(relevant_indices=list(range(1, len(docs) + 1)), sufficient=True)
+
+
+def _search(query: str, k: int) -> list[tuple[Document, float | None]]:
+    """Similarity search returning (doc, score). Falls back to MMR if scores unavailable."""
+    try:
+        pairs = get_vectorstore().similarity_search_with_score(query, k=k)
+        return [(d, s) for d, s in pairs]
+    except Exception:
+        return [(d, None) for d in get_retriever(k=k).invoke(query)]
+
+
 # ── LangChain tool ────────────────────────────────────────────────────────────
 
 @tool
 def retrieve_from_memory(query: str, k: int = 5) -> str:
     """
     Semantic search over the agent's knowledge base (uploaded documents and past notes).
-    Returns the most relevant text chunks.
+    Retrieved chunks are relevance-graded (off-topic ones dropped); if they are
+    insufficient the query is rewritten and retrieval is retried once. Returns the
+    relevant chunks with structured citations (source file, offset, relevance).
 
     Args:
         query: Natural language query.
-        k: Number of chunks to return (default 5).
+        k: Number of chunks to fetch (default 5).
     """
     logger.info(f"[retrieve_from_memory] query='{query}' k={k}")
     try:
-        retriever = get_retriever(k=k)
-        docs = retriever.invoke(query)
-        if not docs:
+        scored = _search(query, k)
+        if not scored:
+            return "No relevant documents found in memory."
+
+        docs = [d for d, _ in scored]
+        grade = _grade(query, docs) if settings.rag_grade else _GradeResult(
+            relevant_indices=list(range(1, len(docs) + 1)), sufficient=True
+        )
+
+        # CRAG corrective step: rewrite query + re-retrieve once if still insufficient.
+        if settings.rag_query_rewrite and not grade.sufficient and grade.rewrite.strip():
+            logger.info(f"[retrieve_from_memory] insufficient → rewriting to '{grade.rewrite}'")
+            rescored = _search(grade.rewrite, k)
+            if rescored:
+                scored = rescored
+                docs = [d for d, _ in scored]
+                grade = _grade(grade.rewrite, docs) if settings.rag_grade else _GradeResult(
+                    relevant_indices=list(range(1, len(docs) + 1)), sufficient=True
+                )
+
+        keep = set(grade.relevant_indices)
+        kept = [(i, scored[i - 1]) for i in sorted(keep) if 1 <= i <= len(scored)]
+        if not kept:
             return "No relevant documents found in memory."
 
         results = []
-        for i, doc in enumerate(docs, 1):
-            src = doc.metadata.get("filename", "unknown")
-            results.append(f"[{i}] Source: {src}\n{doc.page_content}")
+        for out_i, (_, (doc, score)) in enumerate(kept, 1):
+            results.append(f"[{out_i}] {_citation(doc, score)}\n{doc.page_content}")
         return "\n\n---\n\n".join(results)
     except Exception as e:
         logger.error(f"[retrieve_from_memory] error: {e}")

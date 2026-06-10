@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = "./data/chroma_db"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     top_k_retrieval: int = 5
+    rag_grade: bool = True            # CRAG-style LLM relevance grading of retrieved chunks
+    rag_query_rewrite: bool = True    # rewrite the query + re-retrieve once when grading says "insufficient"
 
     # ── MCP ───────────────────────────────────────────────────────────────────
     mcp_filesystem_root: str = "./data/uploads"
