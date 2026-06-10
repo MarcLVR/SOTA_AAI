@@ -46,15 +46,30 @@ async def load_mcp_tools(
         return
 
     logger.info(f"Starting MCP servers: {list(servers.keys())}")
-    client = MultiServerMCPClient(servers, callbacks=_CALLBACKS)
 
+    # Load each server in isolation so one unreachable/misconfigured server
+    # doesn't take down the whole tool set.
+    clients: list[MultiServerMCPClient] = []
+    tools: List[BaseTool] = []
     try:
-        tools = await client.get_tools()
+        for name, cfg in servers.items():
+            try:
+                client = MultiServerMCPClient({name: cfg}, callbacks=_CALLBACKS)
+                server_tools = await client.get_tools()
+                clients.append(client)
+                tools.extend(server_tools)
+                logger.info(f"MCP '{name}': {len(server_tools)} tool(s)")
+            except Exception as e:
+                logger.error(f"MCP server '{name}' failed to load — skipping: {e}")
         logger.info(f"MCP tools loaded: {[t.name for t in tools]}")
         yield tools
     finally:
         logger.info("Shutting down MCP servers")
-        await client.aclose()
+        for client in clients:
+            try:
+                await client.aclose()
+            except Exception as e:
+                logger.warning(f"MCP client close error: {e}")
 
 
 def get_mcp_tools_sync(server_names: List[str] | None = None) -> List[BaseTool]:
@@ -62,20 +77,30 @@ def get_mcp_tools_sync(server_names: List[str] | None = None) -> List[BaseTool]:
     Synchronous helper — runs the async loader in a new event loop.
     Use this when you cannot use async/await (e.g., Gradio callbacks).
 
-    NOTE: The returned tools hold a reference to the running MCP subprocesses.
-    Call `stop_mcp_tools(tools)` when done, or use the async context manager instead.
+    Each MCP tool opens a fresh session per call, so the loader closes its
+    clients before returning — no leaked connections/subprocesses. Servers are
+    loaded in isolation; a failing server is skipped, not fatal.
     """
-    # We keep the client alive by not closing; caller is responsible for cleanup.
     names = server_names or list(MCP_SERVERS.keys())
     servers = {k: v for k, v in MCP_SERVERS.items() if k in names}
 
     if not servers:
         return []
 
-    client = MultiServerMCPClient(servers, callbacks=_CALLBACKS)
-
-    async def _load():
-        return await client.get_tools()
+    async def _load() -> List[BaseTool]:
+        tools: List[BaseTool] = []
+        for name, cfg in servers.items():
+            client = MultiServerMCPClient({name: cfg}, callbacks=_CALLBACKS)
+            try:
+                tools.extend(await client.get_tools())
+            except Exception as e:
+                logger.error(f"MCP server '{name}' failed to load (sync) — skipping: {e}")
+            finally:
+                try:
+                    await client.aclose()
+                except Exception as e:
+                    logger.warning(f"MCP client close error: {e}")
+        return tools
 
     tools = asyncio.run(_load())
     logger.info(f"MCP tools (sync) loaded: {[t.name for t in tools]}")
