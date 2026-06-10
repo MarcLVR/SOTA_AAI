@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     rag_grade: bool = True            # CRAG-style LLM relevance grading of retrieved chunks
     rag_query_rewrite: bool = True    # rewrite the query + re-retrieve once when grading says "insufficient"
 
+    # ── Tool-result caching ────────────────────────────────────────────────────
+    tool_cache_ttl: int = 300         # seconds to cache idempotent tool results (web_search); 0 disables
+
     # ── MCP ───────────────────────────────────────────────────────────────────
     mcp_filesystem_root: str = "./data/uploads"
     # JSON list of remote HTTP MCP servers, e.g.:

@@ -6,6 +6,28 @@ from langchain_core.tools import tool
 from ddgs import DDGS
 from loguru import logger
 
+from config import settings
+from .cache import ttl_cache
+
+
+@ttl_cache(ttl_seconds=settings.tool_cache_ttl)
+def _search(query: str, max_results: int) -> str:
+    """Run the actual DuckDuckGo search. Raises on failure so errors aren't cached."""
+    with DDGS() as ddgs:
+        results = list(ddgs.text(query, max_results=max_results))
+
+    if not results:
+        return "No results found."
+
+    formatted = []
+    for i, r in enumerate(results, 1):
+        formatted.append(
+            f"[{i}] **{r.get('title', 'No title')}**\n"
+            f"URL: {r.get('href', '')}\n"
+            f"{r.get('body', '')}"
+        )
+    return "\n\n".join(formatted)
+
 
 @tool
 def web_search(query: str, max_results: int = 5) -> str:
@@ -19,21 +41,7 @@ def web_search(query: str, max_results: int = 5) -> str:
     """
     logger.info(f"[web_search] query='{query}' max_results={max_results}")
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
-
-        if not results:
-            return "No results found."
-
-        formatted = []
-        for i, r in enumerate(results, 1):
-            formatted.append(
-                f"[{i}] **{r.get('title', 'No title')}**\n"
-                f"URL: {r.get('href', '')}\n"
-                f"{r.get('body', '')}"
-            )
-        return "\n\n".join(formatted)
-
+        return _search(query, max_results)
     except Exception as e:
         logger.error(f"[web_search] error: {e}")
         return f"Search failed: {str(e)}"
