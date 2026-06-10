@@ -20,13 +20,21 @@ class Settings(BaseSettings):
     ollama_embed_model: str = "nomic-embed-text"
 
     # ── LLM provider selection ────────────────────────────────────────────────
-    llm_provider: str = "anthropic"                    # default: anthropic | groq | ollama
+    # Any provider supported by LangChain's init_chat_model works here with zero
+    # code changes — just set LLM_PROVIDER + the matching model/key. The values
+    # below give first-class defaults for the providers we ship and test.
+    llm_provider: str = "anthropic"   # anthropic | groq | ollama | openai | mistralai | google_genai | bedrock | …
+    llm_model: str | None = None      # generic model override for providers without a dedicated field below
+
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-haiku-4-5-20251001"
     groq_model: str = "llama-3.3-70b-versatile"
     groq_api_key: str | None = None
 
+    # OpenAI / OpenAI-compatible endpoints (vLLM, LM Studio, OpenRouter, Together, …)
     openai_api_key: str | None = None
+    openai_model: str = "gpt-4o-mini"
+    openai_base_url: str | None = None   # set to point at any OpenAI-compatible server
 
     # ── Agent behaviour ────────────────────────────────────────────────────────
     max_iterations: int = 10

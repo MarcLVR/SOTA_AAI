@@ -7,7 +7,10 @@ langgraph>=0.2.0
 langgraph-checkpoint-sqlite>=2.0.0
 langchain-anthropic>=0.3.0
 langchain-groq>=0.2.0
-langchain-google-genai>=2.0.0       # unused — kept in case Gemini is re-enabled
+langchain-openai>=0.2.0             # openai + any OpenAI-compatible endpoint (vLLM, LM Studio, OpenRouter)
+langchain-google-genai>=2.0.0       # optional: reachable via LLM_PROVIDER=google_genai
+# Any other LangChain provider works the same way — install its langchain-<provider>
+# extra (e.g. langchain-mistralai, langchain-aws) and set LLM_PROVIDER accordingly.
 
 # ── RAG / Memory ──────────────────────────────────────────────────────────────
 chromadb>=0.5.0
