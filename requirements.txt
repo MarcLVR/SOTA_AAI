@@ -50,6 +50,7 @@ python-pptx>=0.6.0
 psycopg2-binary>=2.9.0            # PostgreSQL driver (chase/db.py)
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
+tenacity>=8.0.0                  # bounded retries around LLM calls (agents/resilience.py)
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 python-dotenv>=1.0.0

@@ -19,11 +19,14 @@ Max revisions per turn is also capped (default 2) to prevent loops.
 """
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, Field, field_validator
 from langchain_core.messages import SystemMessage
 from loguru import logger
 
 from .llm import get_llm
+from .resilience import resilient_invoke
 from config import settings
 from graph.state import AgentState
 
@@ -64,6 +67,35 @@ class CriticDecision(BaseModel):
         return score < REVISION_THRESHOLD
 
 
+_SCORE_RE = re.compile(r'["\']?score["\']?\s*[:=]\s*([01](?:\.\d+)?|\.\d+)', re.IGNORECASE)
+
+
+def _fallback_decision(llm, messages) -> CriticDecision:
+    """Small-model fallback: many local models can't satisfy with_structured_output.
+
+    Ask for a plain answer and scrape the score from the text. If even that fails
+    we return an HONEST low-confidence pass-through — score at the threshold and
+    no revision — rather than the misleading score=1.0 that masks critic failure.
+    """
+    try:
+        raw = resilient_invoke(llm, messages, label="critic-fallback")
+        text = raw.content if hasattr(raw, "content") else str(raw)
+        m = _SCORE_RE.search(text)
+        if m:
+            score = max(0.0, min(1.0, float(m.group(1))))
+            logger.info(f"[critic] fallback parsed score={score:.2f} from free text")
+            return CriticDecision(score=score, critique=text[:300], should_revise=False)
+    except Exception as e:
+        logger.error(f"[critic] free-text fallback also failed: {e}")
+
+    logger.warning("[critic] could not score response — passing through at threshold (no revision)")
+    return CriticDecision(
+        score=REVISION_THRESHOLD,
+        critique="(critic unavailable — response not scored)",
+        should_revise=False,
+    )
+
+
 def critic_node(state: AgentState) -> dict:
     """
     LangGraph node: evaluate the last AI response and decide whether to revise.
@@ -85,14 +117,14 @@ def critic_node(state: AgentState) -> dict:
     ]
 
     try:
-        decision: CriticDecision = structured_llm.invoke(messages)
+        decision: CriticDecision = resilient_invoke(structured_llm, messages, label="critic")
         logger.info(
             f"[critic] score={decision.score:.2f} revise={decision.should_revise} | "
             f"{decision.critique[:80]}…"
         )
     except Exception as e:
-        logger.error(f"[critic] structured output failed: {e}. Skipping revision.")
-        decision = CriticDecision(score=1.0, critique="", should_revise=False)
+        logger.error(f"[critic] structured output failed: {e}. Trying free-text fallback.")
+        decision = _fallback_decision(llm, messages)
 
     return {
         "critique": decision.critique,

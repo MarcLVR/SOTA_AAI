@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     max_supervisor_rounds: int = 5
     temperature: float = 0.0
 
+    # ── LLM call resilience ────────────────────────────────────────────────────
+    llm_max_retries: int = 2          # extra attempts on transient errors (total = 1 + this)
+    llm_retry_max_wait: float = 8.0   # cap on exponential backoff between retries (seconds)
+
     # ── Reflection ────────────────────────────────────────────────────────────
     critic_enabled: bool = False               # set CRITIC_ENABLED=true to enable Reflexion
     critic_revision_threshold: float = 0.70   # below this score → revise

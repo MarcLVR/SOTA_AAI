@@ -25,8 +25,9 @@ MAX_ATTEMPTS = 3
 
 def _call_llm(prompt: str) -> str:
     from agents.llm import get_llm
+    from agents.resilience import resilient_invoke
     llm = get_llm(role="executor")
-    response = llm.invoke(prompt)
+    response = resilient_invoke(llm, prompt, label="executor")
     return response.content if hasattr(response, "content") else str(response)
 
 

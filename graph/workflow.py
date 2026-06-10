@@ -46,6 +46,7 @@ from agents import (
     build_auditor_agent,
 )
 from agents.critic import critic_node, route_after_critic
+from agents.resilience import resilient_invoke
 from config import settings
 from guardrails import input_guard, output_guard
 from guardrails.permissions import check_rate_limit, check_agent, resolve_role
@@ -111,7 +112,7 @@ def _make_agent_node(agent, name: str):
             )
 
         logger.info(f"[{name}] invoked (revision={state.get('revision_count', 0)})")
-        result = agent.invoke({"messages": messages})
+        result = resilient_invoke(agent, {"messages": messages}, label=name)
         last_msg = result["messages"][-1]
 
         return {

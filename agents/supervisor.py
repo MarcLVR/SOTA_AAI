@@ -12,6 +12,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from loguru import logger
 
 from .llm import get_llm
+from .resilience import resilient_invoke
 from config import settings
 from graph.state import AgentState
 from guardrails.permissions import check_agent
@@ -61,7 +62,7 @@ def supervisor_node(state: AgentState) -> dict:
     ]
 
     try:
-        decision: SupervisorDecision = structured_llm.invoke(messages)
+        decision: SupervisorDecision = resilient_invoke(structured_llm, messages, label="supervisor")
         logger.info(f"[supervisor] round={rounds+1} → {decision.next} | {decision.reasoning}")
     except Exception as e:
         logger.error(f"[supervisor] structured output failed: {e}. Defaulting to general.")
