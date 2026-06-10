@@ -2,7 +2,8 @@
 Input / output guardrails — no heavy external deps required.
 
 Input guards (run before the graph):
-  - Prompt injection detection (heuristic + keyword patterns)
+  - Prompt injection detection (keyword patterns + decoding of base64,
+    escape-sequence, and zero-width/bidi obfuscation before matching)
   - PII flagging (regex: email, phone, credit card, SSN)
   - Max length check
   - Topic scope enforcement (optional allowlist)
@@ -20,6 +21,8 @@ Upgrade path: swap the heuristic detectors for
 """
 from __future__ import annotations
 
+import base64
+import codecs
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -79,12 +82,58 @@ _INJECTION_PATTERNS = [
 ]
 
 
-def _detect_injection(text: str) -> tuple[bool, str]:
+def _match_injection(text: str) -> str | None:
+    """Return the first matching injection snippet, or None."""
     for pattern in _INJECTION_PATTERNS:
         m = pattern.search(text)
         if m:
-            return True, f"Possible prompt injection detected: '{m.group(0)[:60]}'"
+            return m.group(0)
+    return None
+
+
+# Obfuscation used to smuggle injections past keyword filters.
+# Zero-width + bidi control chars: U+200B–200F, U+202A–202E, U+2060, U+FEFF.
+_ZERO_WIDTH_RE = re.compile("[​-‏‪-‮⁠﻿]")
+_B64_RE        = re.compile(r"[A-Za-z0-9+/]{16,}={0,2}")
+
+
+def _detect_obfuscated_injection(text: str) -> tuple[bool, str]:
+    """Catch injections hidden via zero-width/bidi chars, escape sequences, or base64."""
+    # 1. Zero-width / bidi smuggling — strip the invisible chars and re-check.
+    stripped = _ZERO_WIDTH_RE.sub("", text)
+    if stripped != text and (hit := _match_injection(stripped)):
+        return True, f"Injection hidden with zero-width/bidi characters: '{hit[:60]}'"
+
+    # 2. Escape-encoded text (\\xNN / \\uNNNN).
+    if "\\x" in text or "\\u" in text:
+        try:
+            decoded = codecs.decode(text, "unicode_escape")
+            if hit := _match_injection(decoded):
+                return True, f"Injection in escape-encoded text: '{hit[:60]}'"
+        except Exception:
+            pass
+
+    # 3. Base64-encoded payloads.
+    for m in _B64_RE.finditer(text):
+        chunk = m.group(0)
+        chunk = chunk[: len(chunk) - (len(chunk) % 4)]  # trim to a multiple of 4
+        if len(chunk) < 16:
+            continue
+        try:
+            decoded = base64.b64decode(chunk, validate=True).decode("utf-8", "ignore")
+        except Exception:
+            continue
+        if decoded and (hit := _match_injection(decoded)):
+            return True, f"Injection in base64-encoded text: '{decoded[:60]}'"
+
     return False, ""
+
+
+def _detect_injection(text: str) -> tuple[bool, str]:
+    hit = _match_injection(text)
+    if hit:
+        return True, f"Possible prompt injection detected: '{hit[:60]}'"
+    return _detect_obfuscated_injection(text)
 
 
 # ── Input guard ───────────────────────────────────────────────────────────────
