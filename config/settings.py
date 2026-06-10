@@ -57,10 +57,15 @@ class Settings(BaseSettings):
 
     # ── RAG ───────────────────────────────────────────────────────────────────
     chroma_persist_dir: str = "./data/chroma_db"
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # bge-small-en-v1.5: 384-dim, CPU-only, no service dependency, stronger than
+    # all-MiniLM-L6-v2 (MTEB ~62 vs ~56). Kept local so the Anthropic path needs no Ollama.
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
     top_k_retrieval: int = 5
     rag_grade: bool = True            # CRAG-style LLM relevance grading of retrieved chunks
     rag_query_rewrite: bool = True    # rewrite the query + re-retrieve once when grading says "insufficient"
+    rag_rerank: bool = True           # second-stage cross-encoder reranking of retrieved chunks
+    rag_rerank_model: str = "BAAI/bge-reranker-base"   # CPU-friendly; override to bge-reranker-v2-m3 for max quality
+    rag_fetch_k: int = 20             # candidates fetched before rerank/grade narrow them down
 
     # ── Tool-result caching ────────────────────────────────────────────────────
     tool_cache_ttl: int = 300         # seconds to cache idempotent tool results (web_search); 0 disables

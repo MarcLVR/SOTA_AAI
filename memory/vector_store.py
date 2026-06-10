@@ -14,7 +14,7 @@ from typing import List
 
 from pydantic import BaseModel, Field
 from langchain_chroma import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from langchain_core.tools import tool
 from langchain_community.document_loaders import (
@@ -123,12 +123,16 @@ def get_retriever(k: int | None = None):
 
 # ── Agentic retrieval: grade → (rewrite + re-retrieve) → cite ──────────────────
 
-def _citation(doc: Document, score: float | None) -> str:
-    """Stable, structured citation header for a chunk."""
+def _citation(doc: Document, score: float | None, label: str = "dist") -> str:
+    """Stable, structured citation header for a chunk.
+
+    label="dist"   → vector distance (lower = closer)
+    label="rerank" → cross-encoder relevance score (higher = more relevant)
+    """
     src   = doc.metadata.get("filename", "unknown")
     start = doc.metadata.get("start_index")
     loc   = f"@{start}" if start is not None else ""
-    sc    = f" dist={score:.3f}" if score is not None else ""   # vector distance, lower = closer
+    sc    = f" {label}={score:.3f}" if score is not None else ""
     return f"Source: {src}{loc}{sc}"
 
 
@@ -185,23 +189,63 @@ def _search(query: str, k: int) -> list[tuple[Document, float | None]]:
         return [(d, None) for d in get_retriever(k=k).invoke(query)]
 
 
+# ── Reranking (second-stage cross-encoder) ─────────────────────────────────────
+
+_reranker = None  # lazy CrossEncoder singleton
+
+
+def _get_reranker():
+    global _reranker
+    if _reranker is None:
+        from sentence_transformers import CrossEncoder
+        logger.info(f"Loading reranker: {settings.rag_rerank_model}")
+        _reranker = CrossEncoder(settings.rag_rerank_model, max_length=512)
+    return _reranker
+
+
+def _rerank(query: str, docs: list[Document], k: int) -> list[tuple[Document, float]] | None:
+    """Cross-encoder rerank → top-k (doc, relevance). Returns None on any failure."""
+    if not docs:
+        return []
+    try:
+        scores = _get_reranker().predict([(query, d.page_content) for d in docs])
+        ranked = sorted(zip(docs, (float(s) for s in scores)), key=lambda x: x[1], reverse=True)
+        return ranked[:k]
+    except Exception as e:
+        logger.warning(f"[retrieve_from_memory] rerank skipped: {e}")
+        return None
+
+
+def _retrieve(query: str, k: int) -> tuple[list[tuple[Document, float | None]], str]:
+    """Fetch candidates, optionally rerank to top-k. Returns (scored, score_label)."""
+    fetch_k = settings.rag_fetch_k if settings.rag_rerank else k
+    scored = _search(query, fetch_k)
+    if not scored:
+        return [], "dist"
+    if settings.rag_rerank:
+        reranked = _rerank(query, [d for d, _ in scored], k)
+        if reranked is not None:
+            return reranked, "rerank"
+    return scored[:k], "dist"
+
+
 # ── LangChain tool ────────────────────────────────────────────────────────────
 
 @tool
 def retrieve_from_memory(query: str, k: int = 5) -> str:
     """
     Semantic search over the agent's knowledge base (uploaded documents and past notes).
-    Retrieved chunks are relevance-graded (off-topic ones dropped); if they are
-    insufficient the query is rewritten and retrieval is retried once. Returns the
-    relevant chunks with structured citations (source file, offset, relevance).
+    Pipeline: fetch candidates → cross-encoder rerank → LLM relevance grade (off-topic
+    chunks dropped) → rewrite query + retry once if still insufficient. Returns the
+    relevant chunks with structured citations (source file, offset, score).
 
     Args:
         query: Natural language query.
-        k: Number of chunks to fetch (default 5).
+        k: Number of chunks to return (default 5).
     """
     logger.info(f"[retrieve_from_memory] query='{query}' k={k}")
     try:
-        scored = _search(query, k)
+        scored, label = _retrieve(query, k)
         if not scored:
             return "No relevant documents found in memory."
 
@@ -213,22 +257,21 @@ def retrieve_from_memory(query: str, k: int = 5) -> str:
         # CRAG corrective step: rewrite query + re-retrieve once if still insufficient.
         if settings.rag_query_rewrite and not grade.sufficient and grade.rewrite.strip():
             logger.info(f"[retrieve_from_memory] insufficient → rewriting to '{grade.rewrite}'")
-            rescored = _search(grade.rewrite, k)
+            rescored, relabel = _retrieve(grade.rewrite, k)
             if rescored:
-                scored = rescored
-                docs = [d for d, _ in scored]
+                scored, label, docs = rescored, relabel, [d for d, _ in rescored]
                 grade = _grade(grade.rewrite, docs) if settings.rag_grade else _GradeResult(
                     relevant_indices=list(range(1, len(docs) + 1)), sufficient=True
                 )
 
-        keep = set(grade.relevant_indices)
-        kept = [(i, scored[i - 1]) for i in sorted(keep) if 1 <= i <= len(scored)]
-        if not kept:
+        keep = sorted(i for i in set(grade.relevant_indices) if 1 <= i <= len(scored))
+        if not keep:
             return "No relevant documents found in memory."
 
         results = []
-        for out_i, (_, (doc, score)) in enumerate(kept, 1):
-            results.append(f"[{out_i}] {_citation(doc, score)}\n{doc.page_content}")
+        for out_i, idx in enumerate(keep, 1):
+            doc, score = scored[idx - 1]
+            results.append(f"[{out_i}] {_citation(doc, score, label)}\n{doc.page_content}")
         return "\n\n---\n\n".join(results)
     except Exception as e:
         logger.error(f"[retrieve_from_memory] error: {e}")

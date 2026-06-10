@@ -251,12 +251,13 @@ def _is_subsequence(needles: list[str], haystack: list[str]) -> bool:
     return all(n in it for n in needles)
 
 
-def _capture_run(graph, query: str, thread_id: str) -> tuple[list[str], set[str]]:
-    """Stream the graph and capture (top-level node trajectory, set of tools called).
+def _capture_run(graph, query: str, thread_id: str) -> tuple[list[str], set[str], list]:
+    """Stream the graph and capture (node trajectory, tools called, message list).
 
     Tool calls happen inside the ReAct specialist subgraphs and are dropped from
     top-level state (the node persists only the final message). subgraphs=True
-    surfaces those inner steps so we can see the actual tool invocations.
+    surfaces those inner steps so we see the actual tool invocations. The ordered
+    message list is fed to agentevals for trajectory matching.
     """
     from langchain_core.messages import HumanMessage, ToolMessage
     from observability import get_callbacks
@@ -272,6 +273,7 @@ def _capture_run(graph, query: str, thread_id: str) -> tuple[list[str], set[str]
 
     trajectory: list[str] = []
     tools_called: set[str] = set()
+    messages: list = [HumanMessage(content=query)]
 
     for ns, update in graph.stream(
         initial_state, config=config, stream_mode="updates", subgraphs=True
@@ -288,6 +290,7 @@ def _capture_run(graph, query: str, thread_id: str) -> tuple[list[str], set[str]
             if not isinstance(msgs, list):
                 msgs = [msgs]
             for m in msgs:
+                messages.append(m)
                 for tc in (getattr(m, "tool_calls", None) or []):
                     name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
                     if name:
@@ -295,7 +298,29 @@ def _capture_run(graph, query: str, thread_id: str) -> tuple[list[str], set[str]
                 if isinstance(m, ToolMessage) and getattr(m, "name", None):
                     tools_called.add(m.name)
 
-    return trajectory, tools_called
+    return trajectory, tools_called, messages
+
+
+def _tool_call_score(messages: list, expected_tools: list[str]) -> bool:
+    """Use agentevals' trajectory subset-match to verify expected tools were called.
+
+    subset mode = the reference tool-calls must all appear in the run (order/extras
+    ignored); tool_args_match_mode='ignore' checks the call happened, not its args.
+    """
+    if not expected_tools:
+        return True
+    from agentevals.trajectory.match import create_trajectory_match_evaluator
+    from langchain_core.messages import AIMessage
+
+    evaluator = create_trajectory_match_evaluator(
+        trajectory_match_mode="subset", tool_args_match_mode="ignore"
+    )
+    reference = [
+        AIMessage(content="", tool_calls=[{"name": t, "args": {}, "id": t}])
+        for t in expected_tools
+    ]
+    result = evaluator(outputs=messages, reference_outputs=reference)
+    return bool(result.get("score"))
 
 
 def run_trajectory_eval() -> dict:
@@ -308,10 +333,12 @@ def run_trajectory_eval() -> dict:
 
     for tc in TRAJECTORY_TESTS:
         try:
-            trajectory, tools = _capture_run(graph, tc.query, thread_id=f"traj-{hash(tc.query)}")
+            trajectory, tools, messages = _capture_run(
+                graph, tc.query, thread_id=f"traj-{hash(tc.query)}"
+            )
 
             nodes_ok = _is_subsequence(tc.expected_nodes, trajectory)
-            tools_ok = all(t in tools for t in tc.expected_tools)
+            tools_ok = _tool_call_score(messages, tc.expected_tools)   # agentevals subset match
             no_forbidden = not any(t in tools for t in tc.forbidden_tools)
             passed = nodes_ok and tools_ok and no_forbidden
             if passed:

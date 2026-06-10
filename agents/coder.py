@@ -2,7 +2,7 @@
 Coder agent — specialises in writing, executing, and explaining code.
 Tools: python_repl, read_file, write_file, list_files.
 """
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langchain_core.messages import SystemMessage
 
 from .llm import get_llm
@@ -20,8 +20,8 @@ Prefer pandas/numpy/matplotlib for data tasks.""")
 
 def build_coder_agent(extra_tools=None):
     tools = CODER_TOOLS + (extra_tools or [])
-    return create_react_agent(
+    return create_agent(
         model=get_llm(),
         tools=tools,
-        prompt=CODER_SYSTEM,
+        system_prompt=CODER_SYSTEM.content,
     )

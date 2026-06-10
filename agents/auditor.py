@@ -2,7 +2,7 @@
 Auditor agent — AI-readiness and data-hygiene specialist.
 Tools: run_full_audit (corpus), plus granular per-document tools.
 """
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langchain_core.messages import SystemMessage
 
 from .llm import get_llm
@@ -35,8 +35,8 @@ AUDITOR_SYSTEM = SystemMessage(content=(
 
 def build_auditor_agent(extra_tools=None):
     tools = AUDITOR_TOOLS + (extra_tools or [])
-    return create_react_agent(
+    return create_agent(
         model=get_llm(role="auditor"),
         tools=tools,
-        prompt=AUDITOR_SYSTEM,
+        system_prompt=AUDITOR_SYSTEM.content,
     )

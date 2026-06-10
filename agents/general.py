@@ -2,7 +2,7 @@
 General agent — handles everything else: reasoning, planning, Q&A, synthesis.
 Has access to all tools.
 """
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langchain_core.messages import SystemMessage
 
 from .llm import get_llm
@@ -18,8 +18,8 @@ quote the relevant passage and name the source.""")
 
 def build_general_agent(extra_tools=None):
     tools = GENERAL_TOOLS + [retrieve_from_memory] + (extra_tools or [])
-    return create_react_agent(
+    return create_agent(
         model=get_llm(),
         tools=tools,
-        prompt=GENERAL_SYSTEM,
+        system_prompt=GENERAL_SYSTEM.content,
     )

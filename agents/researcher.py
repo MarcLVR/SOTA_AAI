@@ -2,7 +2,7 @@
 Researcher agent — specialises in information retrieval.
 Tools: web_search, retrieve_from_memory, read_file, list_files.
 """
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langchain_core.messages import SystemMessage
 
 from .llm import get_llm
@@ -18,8 +18,8 @@ latency. Use web search for recent events or information not in memory.""")
 
 def build_researcher_agent(extra_tools=None):
     tools = RESEARCHER_TOOLS + [retrieve_from_memory] + (extra_tools or [])
-    return create_react_agent(
+    return create_agent(
         model=get_llm(),
         tools=tools,
-        prompt=RESEARCHER_SYSTEM,
+        system_prompt=RESEARCHER_SYSTEM.content,
     )
