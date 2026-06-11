@@ -52,6 +52,15 @@ class TrajectoryTestCase:
     description: str = ""
 
 
+@dataclass
+class PlanTestCase:
+    query: str
+    expected_specialists: list[str]   # specialists the plan should dispatch to (coverage)
+    min_steps: int = 1                # plan must have at least this many steps
+    expect_parallel: bool = False     # at least one group should fan out >1 step in parallel
+    description: str = ""
+
+
 ROUTING_TESTS: list[RoutingTestCase] = [
     RoutingTestCase(
         query="Search the web for the latest news on open source LLMs",
@@ -378,6 +387,129 @@ def run_trajectory_eval() -> dict:
     }
 
 
+# ── Planner eval (plan quality, step adherence, fan-in correctness) ─────────────
+
+PLAN_TESTS: list[PlanTestCase] = [
+    PlanTestCase(
+        query="Do two things: (1) compute 17*23 in Python, and (2) explain in one "
+              "sentence what a Gini coefficient is.",
+        expected_specialists=["coder", "general"],
+        min_steps=2,
+        expect_parallel=True,
+        description="Two independent sub-tasks → parallel coder + general, fan-in merges both",
+    ),
+    PlanTestCase(
+        query="What is the capital of France?",
+        expected_specialists=["general"],
+        min_steps=1,
+        expect_parallel=False,
+        description="Trivial single-step plan → one general step",
+    ),
+]
+
+
+def _capture_planner_run(graph, query: str, thread_id: str):
+    """Stream the planner graph; return (top-level node trajectory, final state)."""
+    from langchain_core.messages import HumanMessage
+    from observability import get_callbacks
+
+    initial_state = {
+        "messages": [HumanMessage(content=query)],
+        "next_agent": "", "reasoning": "", "last_specialist": "",
+        "supervisor_rounds": 0, "critique": "", "critique_score": 0.0,
+        "should_revise": False, "revision_count": 0, "retrieved_context": "",
+        "plan": [], "step_results": [], "plan_start": 0, "processed_count": 0,
+        "replan_count": 0, "hitl_required": False,
+    }
+    config = {"configurable": {"thread_id": thread_id}, "callbacks": get_callbacks()}
+    trajectory: list[str] = []
+    for ns, update in graph.stream(
+        initial_state, config=config, stream_mode="updates", subgraphs=True
+    ):
+        if len(ns) != 0 or not isinstance(update, dict):
+            continue
+        trajectory.extend(update.keys())
+    final = graph.get_state(config).values
+    return trajectory, final
+
+
+def run_planner_eval() -> dict:
+    """Assert on the planner: plan quality, step adherence, and fan-in correctness.
+
+    Forces PLANNER_ENABLED on for the duration regardless of the ambient setting so
+    the eval is deterministic about which topology it exercises.
+    """
+    from langchain_core.messages import AIMessage
+    from config import settings
+    from graph.workflow import build_graph
+
+    prev = settings.planner_enabled
+    settings.planner_enabled = True
+    results, correct = [], 0
+    try:
+        graph = build_graph()
+        for tc in PLAN_TESTS:
+            try:
+                trajectory, final = _capture_planner_run(
+                    graph, tc.query, thread_id=f"plan-{hash(tc.query)}"
+                )
+                step_results = final.get("step_results", [])
+                used = [r["specialist"] for r in step_results]
+
+                # Plan quality: expected specialists are covered by the executed steps.
+                plan_quality = all(s in used for s in tc.expected_specialists) and \
+                    len(step_results) >= tc.min_steps
+                # Step adherence: every planned step ran a worker (one result each) and
+                # the planner→dispatch→worker→aggregate→replan path appears.
+                worker_runs = trajectory.count("fanout_worker")
+                step_adherence = (
+                    worker_runs == len(step_results) and len(step_results) >= 1
+                    and _is_subsequence(
+                        ["planner", "plan_dispatch", "fanout_worker", "plan_aggregate", "replan"],
+                        trajectory,
+                    )
+                )
+                # Fan-in correctness: aggregate ran, every step produced a result with
+                # no unmerged leftovers, the plan drained, and a final answer exists.
+                agg_runs = trajectory.count("plan_aggregate")
+                last_ai = next((m for m in reversed(final.get("messages", []))
+                                if isinstance(m, AIMessage)), None)
+                fanin_ok = (
+                    agg_runs >= 1
+                    and all(r.get("ok") for r in step_results)
+                    and not final.get("plan")
+                    and last_ai is not None and bool(last_ai.content)
+                )
+                # Parallelism expectation (a group fanned out >1 worker in one superstep).
+                parallel_ok = (not tc.expect_parallel) or (len(step_results) >= 2)
+
+                passed = plan_quality and step_adherence and fanin_ok and parallel_ok
+                if passed:
+                    correct += 1
+                logger.info(
+                    f"[planner_eval] {'✓' if passed else '✗'} {tc.description} | "
+                    f"steps={len(step_results)} used={used} workers={worker_runs} agg={agg_runs}"
+                )
+                results.append({
+                    "query": tc.query, "passed": passed,
+                    "plan_quality": plan_quality, "step_adherence": step_adherence,
+                    "fanin_ok": fanin_ok, "parallel_ok": parallel_ok,
+                    "specialists_used": used, "worker_runs": worker_runs,
+                    "aggregate_runs": agg_runs, "trajectory": trajectory,
+                    "description": tc.description,
+                })
+            except Exception as e:
+                logger.error(f"[planner_eval] error: {e}")
+                results.append({"query": tc.query, "passed": False, "error": str(e),
+                                "description": tc.description})
+    finally:
+        settings.planner_enabled = prev
+
+    accuracy = correct / len(PLAN_TESTS) if PLAN_TESTS else 0.0
+    logger.info(f"[planner_eval] accuracy = {accuracy:.0%} ({correct}/{len(PLAN_TESTS)})")
+    return {"accuracy": accuracy, "correct": correct, "total": len(PLAN_TESTS), "cases": results}
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -387,10 +519,11 @@ def main():
     parser.add_argument("--routing", action="store_true")
     parser.add_argument("--e2e", action="store_true")
     parser.add_argument("--trajectory", action="store_true")
+    parser.add_argument("--planner", action="store_true")
     parser.add_argument("--output", default="eval/results/agent_eval.json")
     args = parser.parse_args()
 
-    run_all = not args.routing and not args.e2e and not args.trajectory
+    run_all = not args.routing and not args.e2e and not args.trajectory and not args.planner
 
     report: dict = {}
 
@@ -405,6 +538,10 @@ def main():
     if args.trajectory or run_all:
         logger.info("=== Trajectory eval ===")
         report["trajectory"] = run_trajectory_eval()
+
+    if args.planner or run_all:
+        logger.info("=== Planner eval ===")
+        report["planner"] = run_planner_eval()
 
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:

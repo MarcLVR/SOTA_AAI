@@ -222,17 +222,45 @@ def build_graph(mcp_tools: list | None = None, enable_hitl: bool = False) -> Any
     builder.add_node("critic",        critic_node)
     builder.add_node("hitl",          hitl_node)
 
+    # Plan-and-execute subgraph (opt-in). When enabled, guardrail routes into the
+    # planner instead of the supervisor; the supervisor node stays registered but
+    # unreachable (same pattern as the disabled critic).
+    if settings.planner_enabled:
+        from graph.planner import make_planner_nodes, fan_out, route_after_replan
+        pnodes = make_planner_nodes(
+            {"researcher": researcher, "coder": coder, "general": general, "auditor": auditor}
+        )
+        for pname, pfn in pnodes.items():
+            builder.add_node(pname, pfn)
+
+    entry = "planner" if settings.planner_enabled else "supervisor"
+
     # ── Edges ─────────────────────────────────────────────────────────────────
 
     # Entry
     builder.add_edge(START, "guardrail_in")
 
-    # Guardrail → supervisor (or short-circuit to END if blocked)
+    # Guardrail → planner/supervisor (or short-circuit to END if blocked)
     builder.add_conditional_edges(
         "guardrail_in",
-        lambda s: "END" if s.get("next_agent") == "FINISH" else "supervisor",
-        {"END": END, "supervisor": "supervisor"},
+        lambda s: "END" if s.get("next_agent") == "FINISH" else entry,
+        {"END": END, entry: entry},
     )
+
+    # Planner subgraph wiring
+    if settings.planner_enabled:
+        # critic (if enabled) sits between the completed plan and hitl, exactly as
+        # it does for specialists; otherwise replan-done goes straight to hitl.
+        done_target = "critic" if settings.critic_enabled else "hitl"
+        builder.add_edge("planner", "plan_dispatch")
+        builder.add_conditional_edges("plan_dispatch", fan_out, ["fanout_worker", "plan_aggregate"])
+        builder.add_edge("fanout_worker", "plan_aggregate")
+        builder.add_edge("plan_aggregate", "replan")
+        builder.add_conditional_edges(
+            "replan",
+            route_after_replan,
+            {"plan_dispatch": "plan_dispatch", "DONE": done_target},
+        )
 
     # Supervisor → specialists or finish
     builder.add_conditional_edges(
@@ -321,6 +349,11 @@ def run_query(
         "should_revise": False,
         "revision_count": 0,
         "retrieved_context": "",
+        "plan": [],
+        "step_results": [],
+        "plan_start": 0,
+        "processed_count": 0,
+        "replan_count": 0,
         "hitl_required": hitl_required,
     }
 

@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     context_keep_last: int = 10       # most-recent messages always kept verbatim
     context_summarize: bool = False   # True → summarise dropped messages with one LLM call
 
+    # ── Plan-and-execute (opt-in) ──────────────────────────────────────────────
+    planner_enabled: bool = False     # set PLANNER_ENABLED=true to route via the planner subgraph
+    planner_max_replans: int = 2      # max replanning rounds per request on step failure
+
     # ── Reflection ────────────────────────────────────────────────────────────
     critic_enabled: bool = False               # set CRITIC_ENABLED=true to enable Reflexion
     critic_revision_threshold: float = 0.70   # below this score → revise

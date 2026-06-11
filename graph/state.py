@@ -6,6 +6,7 @@ Using TypedDict + Annotated lets LangGraph merge message lists automatically.
 """
 from __future__ import annotations
 
+import operator
 from typing import Annotated, Sequence, TypedDict
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
@@ -29,6 +30,15 @@ class AgentState(TypedDict):
 
     # ── RAG context ───────────────────────────────────────────────────────────
     retrieved_context: str    # relevant memory chunks for the current query
+
+    # ── Plan-and-execute (opt-in, PLANNER_ENABLED) ────────────────────────────
+    # Only populated when the planner subgraph is wired in. Additive — old
+    # checkpoints without these keys still load (nodes read with .get()).
+    plan: list                                      # remaining planned steps (dicts)
+    step_results: Annotated[list, operator.add]     # results across groups (reducer: parallel-safe)
+    plan_start: int                                 # offset where this run's results begin
+    processed_count: int                            # absolute boundary of folded-in results
+    replan_count: int                               # number of replanning rounds this run
 
     # ── Human-in-the-loop ─────────────────────────────────────────────────────
     hitl_required: bool       # whether HITL check is triggered before FINISH
