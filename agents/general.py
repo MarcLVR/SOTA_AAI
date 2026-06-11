@@ -6,6 +6,7 @@ from langchain.agents import create_agent
 from langchain_core.messages import SystemMessage
 
 from .llm import get_llm
+from .middleware import build_summarizer
 from tools import GENERAL_TOOLS
 from memory import retrieve_from_memory
 
@@ -22,4 +23,5 @@ def build_general_agent(extra_tools=None):
         model=get_llm(),
         tools=tools,
         system_prompt=GENERAL_SYSTEM.content,
+        middleware=[build_summarizer()],
     )

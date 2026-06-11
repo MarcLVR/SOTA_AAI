@@ -6,6 +6,7 @@ from langchain.agents import create_agent
 from langchain_core.messages import SystemMessage
 
 from .llm import get_llm
+from .middleware import build_summarizer
 from tools import AUDITOR_TOOLS
 from domain.prompts import INSPECTOR_SYSTEM
 
@@ -39,4 +40,5 @@ def build_auditor_agent(extra_tools=None):
         model=get_llm(role="auditor"),
         tools=tools,
         system_prompt=AUDITOR_SYSTEM.content,
+        middleware=[build_summarizer()],
     )

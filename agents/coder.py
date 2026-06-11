@@ -6,6 +6,7 @@ from langchain.agents import create_agent
 from langchain_core.messages import SystemMessage
 
 from .llm import get_llm
+from .middleware import build_summarizer
 from tools import CODER_TOOLS
 
 CODER_SYSTEM = SystemMessage(content="""You are the Coder agent.
@@ -24,4 +25,5 @@ def build_coder_agent(extra_tools=None):
         model=get_llm(),
         tools=tools,
         system_prompt=CODER_SYSTEM.content,
+        middleware=[build_summarizer()],
     )

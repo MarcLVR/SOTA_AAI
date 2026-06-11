@@ -146,3 +146,193 @@ User chose the most-SOTA option that stays operationally reliable. Implementing 
   Anthropic path stays operative without Ollama running. Requires wiping/re-ingesting ChromaDB.
 - **Defer:** C6 (SummarizationMiddleware — keep uniform node-level compaction that also covers the
   critic), C8 (Zep/LangMem), deepagents, A2A. All on roadmap.
+
+---
+
+# Phase 2 — Deferred roadmap implementation (June 2026)
+
+> Status: **Implementation plan — GATE. Awaiting approval before any code is written.**
+> APIs below were re-verified against the installed venv (langchain 1.3.2, langgraph 1.2.2,
+> langchain-core 1.4.0, langgraph-checkpoint 4.1.1) and official docs in June 2026 — not training
+> data. Where a fact was confirmed by live introspection/execution it is marked **[verified]**.
+
+Picking up four items previously deferred to the roadmap: SummarizationMiddleware (was C6),
+planner + parallel fan-out (P10/P11), memory consolidation (C8), and Docker Compose.
+
+## Phase 1 — `create_agent` + `SummarizationMiddleware`
+
+**Approach.** Attach `SummarizationMiddleware` to each of the 4 specialists (all already
+`langchain.agents.create_agent`) and remove the manual `compact_messages()` call from the
+specialist node wrapper. The middleware fires `before_model` on every agent step, so compaction
+becomes declarative and also covers *intra-turn* tool loops (the hand-rolled node only ran once at
+node entry).
+
+- API **[verified]**: `from langchain.agents.middleware import SummarizationMiddleware`;
+  `SummarizationMiddleware(model, *, trigger=("tokens"|"messages", N) | list, keep=("messages", N),
+  token_counter=..., summary_prompt=..., trim_tokens_to_summarize=4000)`. `create_agent(...,
+  middleware=[...])` is the exact kwarg. `trigger=None` ⇒ never summarizes, so we set it explicitly.
+- **Ollama constraint [verified]**: `("fraction", f)` requires a model profile that `ChatOllama`
+  does not expose (raises `ValueError`). So we use absolute `("messages", N)`/`("tokens", N)` only.
+  Summarizer model = the local default `get_llm()` (Ollama-safe, no API key).
+- Map existing knobs to the middleware: `trigger=("messages", context_max_messages)`,
+  `keep=("messages", context_keep_last)` — behaviour stays equivalent for short threads (no-op until
+  the threshold), and triggers on long ones.
+- **Critic stays node-level**: the critic is a plain `with_structured_output` call, *not* a
+  `create_agent`, so the middleware cannot attach to it **[verified]**. `graph/compaction.py` is
+  therefore **kept** (not deleted) and `critic_node` keeps calling `compact_messages()`. This is the
+  honest deviation from "delete the old node": full deletion is impossible while the critic isn't an
+  agent. The specialist path stops using it.
+
+**Files touched.** `agents/researcher.py`, `agents/coder.py`, `agents/general.py`,
+`agents/auditor.py` (add `middleware=[summarizer]`); a new tiny `agents/middleware.py` factory
+`build_summarizer()` reading settings; `graph/workflow.py` (`_make_agent_node`: drop the
+`compact_messages` call, keep critique injection); `config/settings.py` (no new vars — reuse
+`context_max_messages`/`context_keep_last`; add `context_summary_role` optional). `graph/compaction.py`
+**unchanged** (still used by critic).
+
+**New deps.** None — `SummarizationMiddleware` ships in the installed `langchain 1.3.2`.
+
+**Rollback.** Revert the 4 builders + `_make_agent_node`; the specialists fall back to the existing
+`compact_messages()` call. No state-schema or topology change, so rollback is a clean `git revert`.
+
+## Phase 2 — Plan-and-execute planner + parallel fan-out
+
+**Approach.** Strictly **opt-in** behind `PLANNER_ENABLED` (default `false`) so the shipped default
+graph is byte-for-byte the current topology. When enabled, insert a plan-and-execute subgraph
+between `guardrail_in` and the specialists:
+
+1. **`planner`** node — `get_llm().with_structured_output(Plan)`. `Plan = {steps: [Step]}`,
+   `Step = {description, specialist: researcher|coder|general|auditor, group: int}`. Steps sharing a
+   `group` are independent and run in parallel; ascending groups run sequentially.
+2. **`dispatch`** node — pops the next group. A conditional edge returns
+   `[Send("fanout_worker", {step, ...}) for step in group]` **[verified Send idiom, 1.2.2]**. A
+   single-step group still goes through one `Send` (uniform path).
+3. **`fanout_worker`** — a *parallel-safe* specialist wrapper. Critical design point: parallel
+   branches must **only write reducer-protected keys**. It writes `step_results:
+   Annotated[list, operator.add]` and appends to `messages` (which already has the `add_messages`
+   reducer — unique message ids make concurrent appends safe). It must **not** write scalar
+   `next_agent`/`last_specialist` (concurrent scalar writes raise `InvalidUpdateError` **[verified]**).
+4. **`aggregate`** (fan-in) — runs **exactly once** after all branches **[verified]**. Merges
+   `step_results` into `past_steps`, composes the merged work into a single AIMessage, and sets the
+   scalar routing fields once. Then → `critic` (if enabled) → `replan`.
+5. **`replan`** node — `with_structured_output(Act)` where `Act = Response | Plan`. On step failure
+   (a worker recorded an error in `step_results`) or remaining steps, emit a revised `Plan`; else
+   emit `Response` and route to `hitl`. Capped by `PLANNER_MAX_REPLANS`.
+
+**Composition with critic + HITL [verified safe].** Live test on the installed venv confirmed: an
+`interrupt()` in one of several parallel `Send` branches checkpoints and, on resume, **only the
+interrupted branch re-runs** — completed specialists are not double-executed. Multi-branch
+simultaneous interrupts resume via the `{interrupt_id: value}` map. So HITL composes; the existing
+single-response HITL stays, and we keep any side effects after the `interrupt()` call (node re-runs
+from its top on resume). The critic runs on the aggregated message, unchanged.
+
+**Files touched.** New `graph/planner.py` (planner/dispatch/aggregate/replan nodes + `Plan`/`Step`/
+`Act` Pydantic models + Send fan-out). `graph/state.py` (+ `plan`, `past_steps`
+`Annotated[list, operator.add]`, `step_results` `Annotated[list, operator.add]`, `replan_count`).
+`graph/workflow.py` (`build_graph`: when `PLANNER_ENABLED`, wire the planner subgraph; else the
+current edges verbatim). `config/settings.py` (+ `planner_enabled=False`, `planner_max_replans=2`).
+`eval/agent_eval.py` (+ `PlanTestCase`: plan-quality = expected specialists covered; step-adherence
+= trajectory contains planned specialists in group order; fan-in-correctness = aggregate runs once &
+all `step_results` present). `main.py`/`ui` untouched (graph interface unchanged).
+
+**New deps.** None — `Send`/`Command`/reducers are core langgraph 1.2.2.
+
+**Rollback.** `PLANNER_ENABLED=false` (the default) fully disables it at build time — the planner
+nodes are never added to the graph, so the topology is identical to today. Hard rollback = revert
+`graph/planner.py` + the guarded block in `build_graph` + the additive state fields (additive, so
+old checkpoints still load).
+
+**Risk note.** Highest-risk phase (the original deferral reason). Mitigated by: default-off,
+build-time gating (not runtime branching inside the live path), additive-only state, and the
+verified interrupt-resume behaviour. If fan-in/interrupt composition misbehaves under the critic, we
+ship planner **sequential-only** (skip the `Send` fan-out, run groups serially) as a fallback that
+still delivers planning without the parallelism risk.
+
+## Phase 3 — Memory consolidation (LangMem behind the episodic interface)
+
+**Decision: LangMem, introduced as an opt-in backend; Mem0 stays the local default for one release.**
+Rationale (fresh search): Graphiti/Zep is **disqualified for the default path** — it mandates a
+separate graph-DB server (Neo4j/FalkorDB) and its own docs warn that small local models "frequently
+emit JSON that doesn't match the expected schema," causing ingestion failures on the Ollama default.
+LangMem is LangChain-native (built on LangGraph `BaseStore`), runs fully local (local LLM + Ollama
+embeddings, LangSmith optional), and adds genuine background **consolidation** + procedural memory
+over Mem0's per-call extraction. **Caveat:** LangMem is `0.0.30` (Oct 2025, predates langchain 1.x)
+— dependency-resolver compatibility against the installed `langchain 1.3.2` / `langgraph 1.2.2` is
+**unverified** and is the gating risk. Persistence: there is **no SQLite vector `BaseStore`**
+**[verified]**, so we back LangMem with the **existing ChromaDB** via a thin `BaseStore` adapter (no
+new infra), not RAM-only `InMemoryStore`.
+
+**Approach.** Refactor `memory/episodic.py` into a pluggable backend behind the *unchanged* public
+surface (`add_memory`, `search_memories`, `get_all_memories`, and the `remember`/`recall` tools).
+Select via `EPISODIC_BACKEND=mem0|langmem` (**default `mem0`**). Mem0 path is the current code,
+untouched. LangMem path wires `create_manage_memory_tool`/`create_search_memory_tool` +
+`create_memory_store_manager(get_llm())` over a Chroma-backed store with `OllamaEmbeddings`. Provide
+`scripts/migrate_episodic.py` that reads Mem0 `get_all()` facts and re-adds them through the LangMem
+backend (best-effort); document that if migration is skipped, switching backends starts memory fresh.
+
+**Gate inside the phase.** First step is a throwaway-venv dry-run install of `langmem==0.0.30`
+against the current lockfile. **If it conflicts**, we do *not* force an incompatible pin: we ship the
+pluggable-backend refactor with Mem0 as the only wired backend and document LangMem as
+"install-and-flag when resolver allows," keeping the abstraction so adoption is a one-flag change
+later. This keeps the default path working no matter what.
+
+**Files touched.** `memory/episodic.py` (extract `_Mem0Backend`, add `_LangMemBackend`, dispatch on
+setting; public functions/tools unchanged). `config/settings.py` (+ `episodic_backend="mem0"`).
+New `scripts/migrate_episodic.py`. `requirements.txt` (+ `langmem` *only if* the dry-run passes,
+pinned; otherwise documented as optional). `memory/__init__.py` exports unchanged.
+
+**New deps.** `langmem` (pinned, optional) — justified by consolidation + LangGraph-native
+integration; **added only if the compatibility dry-run passes**. No new infra (reuses ChromaDB +
+Ollama).
+
+**Rollback.** `EPISODIC_BACKEND=mem0` (default) restores exact current behaviour; the LangMem code
+path is dormant unless selected. Revert = drop the `_LangMemBackend` branch.
+
+## Phase 4 — Docker Compose
+
+**Approach.** One-command `docker compose up` bringing up the app + Postgres, with SQLite remaining
+the no-docker default. Swap the checkpointer to `langgraph-checkpoint-postgres` **only when
+`POSTGRES_URI` is set** (so local/no-docker users are unaffected). Ollama runs **host-mode**
+(recommended, GPU) reached via `host.docker.internal:host-gateway` with `OLLAMA_BASE_URL` override
+(the app already reads `OLLAMA_BASE_URL`, and `main.py` already binds `0.0.0.0` **[verified]**).
+
+- Checkpointer **[verified]**: long-lived sync `PostgresSaver(ConnectionPool(conninfo=POSTGRES_URI,
+  open=True, kwargs={autocommit:True, prepare_threshold:0, row_factory:dict_row}))` + idempotent
+  `.setup()` at build — *not* `from_conn_string` (a `@contextmanager` that closes the connection).
+  Guarded by `if os.getenv("POSTGRES_URI")`, else the current `SqliteSaver`.
+- Compose: `postgres:16` with `pg_isready` healthcheck; app `depends_on: condition:
+  service_healthy`; named volumes for `pg_data` and `/app/data` (chroma + mem0 + sqlite checkpoints);
+  `env_file: .env`; `extra_hosts: ["host.docker.internal:host-gateway"]`. No obsolete `version:` key.
+- Dockerfile: `python:3.11-slim` (3.12+ breaks mem0/chroma), `build-essential`, layer-cached
+  `pip install -r requirements.txt`, `EXPOSE 7860`, `CMD ["python","main.py"]`.
+
+**Files touched.** New `docker-compose.yml`, new `Dockerfile`, new `.dockerignore`.
+`graph/workflow.py` (checkpointer block → Postgres-when-`POSTGRES_URI`-else-SQLite).
+`requirements.txt` (+ `langgraph-checkpoint-postgres==3.1.0`, `psycopg[binary]>=3.2.0`,
+`psycopg-pool>=3.2.0`). `config/settings.py` (+ `postgres_uri: str | None = None`). `.env.example`
+(+ `POSTGRES_URI` commented). `README.md` (new plain-language "Run with Docker" section + Docker
+troubleshooting rows).
+
+**New deps.** `langgraph-checkpoint-postgres==3.1.0` (compatible with installed
+`langgraph-checkpoint 4.1.1` **[verified]**), `psycopg[binary]` + `psycopg-pool` (psycopg3 — the
+repo only has psycopg2-binary today, used by `chase/db.py`; the checkpointer requires psycopg3).
+Justified by the optional Postgres checkpointer; **inert unless `POSTGRES_URI` is set**.
+
+**Rollback.** No `POSTGRES_URI` / no docker ⇒ identical SQLite behaviour. Remove the three new files
++ revert the checkpointer block; the extra deps are unused without `POSTGRES_URI`.
+
+## Cross-cutting verification (run after every phase)
+
+`python -m eval.agent_eval` (routing + e2e + trajectory) and `python -m eval.rag_eval` pass; the app
+boots with defaults unchanged (local Ollama, no API key, no docker, SQLite checkpointer); HITL
+`interrupt()` + checkpoint resume still work. Commit per phase with a one-line summary.
+
+### Known unverified items (carried forward, to confirm during implementation)
+- LangMem `0.0.30` dependency resolution against langchain 1.3.2 / langgraph 1.2.2 (Phase 3 gate).
+- `nomic-embed-text` exact dimensionality for the LangMem store `index.dims` (confirm via
+  `len(OllamaEmbeddings(...).embed_query("x"))`).
+- Host-Ollama reachability from the container requires the host daemon to bind `0.0.0.0`
+  (`OLLAMA_HOST=0.0.0.0:11434`) and allow the docker bridge subnet — host-side, not fixable in
+  Compose; documented in README troubleshooting.
+- The dict-form `trigger` (AND logic) for SummarizationMiddleware is absent from installed 1.3.2 —
+  we use list/tuple `ContextSize` forms only.
