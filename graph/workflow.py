@@ -310,14 +310,33 @@ def build_graph(mcp_tools: list | None = None, enable_hitl: bool = False) -> Any
     )
 
     # ── Persistence ───────────────────────────────────────────────────────────
+    # Postgres when POSTGRES_URI is set (Docker / multi-process), else SQLite — the
+    # no-docker default. A long-lived ConnectionPool is used (not from_conn_string,
+    # which is a context manager that closes the connection on exit).
     settings.chroma_path.mkdir(parents=True, exist_ok=True)
-    db_path = str(settings.chroma_path / "checkpoints.sqlite")
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    checkpointer = SqliteSaver(conn)
+    if settings.postgres_uri:
+        from psycopg_pool import ConnectionPool
+        from psycopg.rows import dict_row
+        from langgraph.checkpoint.postgres import PostgresSaver
+
+        pool = ConnectionPool(
+            conninfo=settings.postgres_uri,
+            max_size=20,
+            open=True,
+            kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+        )
+        checkpointer = PostgresSaver(pool)
+        checkpointer.setup()  # idempotent; creates checkpoint tables on first run
+        logger.info("Checkpointer = PostgresSaver (POSTGRES_URI set)")
+    else:
+        db_path = str(settings.chroma_path / "checkpoints.sqlite")
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        checkpointer = SqliteSaver(conn)
 
     graph = builder.compile(checkpointer=checkpointer)
     logger.info(
-        f"LangGraph compiled (hitl={enable_hitl}, critic={settings.critic_enabled})"
+        f"LangGraph compiled (hitl={enable_hitl}, critic={settings.critic_enabled}, "
+        f"planner={settings.planner_enabled})"
     )
     return graph
 

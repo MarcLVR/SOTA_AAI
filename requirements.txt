@@ -7,6 +7,11 @@ langgraph>=1.0
 langchain-community>=0.3.0          # document loaders only (sunset; loaders still live here)
 langchain-ollama>=0.2.0
 langgraph-checkpoint-sqlite>=2.0.0
+# Optional Postgres checkpointer — used only when POSTGRES_URI is set (e.g. Docker
+# Compose). Inert on the default SQLite path. Verified compatible with the 1.x stack.
+langgraph-checkpoint-postgres>=3.1.0
+psycopg[binary]>=3.2.0
+psycopg-pool>=3.2.0
 langchain-anthropic>=0.3.0
 langchain-groq>=0.2.0
 langchain-openai>=0.2.0             # openai + any OpenAI-compatible endpoint (vLLM, LM Studio, OpenRouter)

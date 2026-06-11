@@ -314,6 +314,41 @@ python main.py --query "..."      # ask one question, print the answer, exit
 
 ---
 
+## Run with Docker
+
+If you prefer not to install Python and the libraries yourself, you can run everything in containers with one command. This also starts a real **PostgreSQL** database, which the app uses to remember conversations more robustly than the default single-file storage.
+
+You need one free program: **Docker Desktop** ([docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/)). Install it, open it once so it is running, then:
+
+```bash
+# From inside the project folder (the one with docker-compose.yml)
+cp .env.example .env      # create your settings file (same as Step 4 above)
+docker compose up         # build and start the app + database
+```
+
+The first run takes a few minutes while it downloads and builds. When you see a line about the app running on port 7860, open **http://localhost:7860** in your browser. To stop everything, press **Ctrl + C**, or run `docker compose down` in another terminal.
+
+**Which AI does it use?** Same two choices as the normal install, set in `.env`:
+
+- **Claude (Choice B)** — set `LLM_PROVIDER=anthropic` and your `ANTHROPIC_API_KEY` in `.env`. Nothing else to do; it works inside Docker out of the box.
+- **Local Ollama (Choice A)** — Ollama runs on your **host machine** (so it can use your GPU), and the container talks to it automatically via `host.docker.internal`. Two things the host side needs:
+  1. Ollama must accept connections from Docker, not just itself. Start it with `OLLAMA_HOST=0.0.0.0:11434` (on Linux, set that in Ollama's service environment; on Mac/Windows Docker Desktop this usually works as-is).
+  2. Your firewall must allow the Docker network to reach the host.
+
+**What persists?** Your uploaded documents, knowledge base, and memories are kept in a Docker **volume**, so they survive restarts. Conversation checkpoints are stored in the Postgres database (also a volume). Running without Docker (`python main.py`) keeps using the simple single-file storage instead — both work; Docker just adds the database.
+
+### Docker troubleshooting
+
+| What you see | What it means | Fix |
+|---|---|---|
+| `docker: command not found` | Docker Desktop is not installed or not running | Install Docker Desktop and open it once before running `docker compose up` |
+| App can't reach Ollama (`Connection refused` to `host.docker.internal`) | Host Ollama isn't accepting outside connections | Restart Ollama with `OLLAMA_HOST=0.0.0.0:11434`; allow the Docker network through your firewall |
+| `could not be found in this WSL 2 distro` | Docker Desktop's WSL integration is off | Docker Desktop → Settings → Resources → WSL Integration → enable your distro |
+| App starts before the database is ready | Rare; the app waits for a Postgres healthcheck, but a slow first boot can race | `docker compose up` again — Postgres data persists, so it starts healthy the second time |
+| Want the simple file storage instead of Postgres | You don't need the database | Run `python main.py` directly (no Docker), or remove `POSTGRES_URI` from the app environment |
+
+---
+
 ## Configuration
 
 All variables are read from `.env` (or the shell environment).

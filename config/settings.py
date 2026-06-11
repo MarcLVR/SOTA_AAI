@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     # ── Semantic compliance layer ─────────────────────────────────────────────
     semantic_enabled: bool = False   # set True to enable ChromaDB standards comparison
 
+    # ── Checkpointer ───────────────────────────────────────────────────────────
+    # When set, the LangGraph checkpointer uses Postgres instead of SQLite (e.g. in
+    # Docker Compose). Unset (default) → SQLite at data/chroma_db/checkpoints.sqlite,
+    # the no-docker default. Example: postgresql://app:app_pw@postgres:5432/app
+    postgres_uri: str | None = None
+
     # ── Analytics / PostgreSQL ────────────────────────────────────────────────
     db_enabled: bool = False   # set True only when Postgres is reachable; protects demo
 
