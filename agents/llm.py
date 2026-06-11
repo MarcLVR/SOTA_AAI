@@ -36,6 +36,28 @@ from loguru import logger
 from config import settings
 
 
+@lru_cache(maxsize=1)
+def _dotenv_values() -> dict:
+    """Parse the .env file once for dynamically-named ROLE_* overrides.
+
+    pydantic-settings reads .env into the Settings object but, with extra='ignore',
+    drops keys it has no field for (the per-role ROLE_PROVIDER_*/ROLE_MODEL_*/
+    ROLE_MAX_TOKENS_* are dynamic). Those keys therefore never reach os.environ, so
+    a .env-defined override would be silently ignored. We parse .env directly as a
+    fallback; a real environment variable still wins.
+    """
+    try:
+        from dotenv import dotenv_values
+        return {k: v for k, v in dotenv_values(settings.model_config.get("env_file", ".env")).items() if v is not None}
+    except Exception:
+        return {}
+
+
+def _role_env(key: str) -> str | None:
+    """Resolve a ROLE_* override: real env var first, then .env fallback."""
+    return os.environ.get(key) or _dotenv_values().get(key)
+
+
 # ── Per-role output-token caps ────────────────────────────────────────────────
 # Chat models default to very high max_tokens (often the model maximum) — absurd
 # for our use cases. These caps prevent runaway output costs with no quality loss.
@@ -68,7 +90,7 @@ _PROVIDER_DEFAULT_MODEL = {
 def _max_tokens_for_role(role: str | None) -> int:
     """Return the output-token cap for a role, with env-var override support."""
     if role:
-        env_val = os.environ.get(f"ROLE_MAX_TOKENS_{role.upper()}")
+        env_val = _role_env(f"ROLE_MAX_TOKENS_{role.upper()}")
         if env_val:
             return int(env_val)
         return _ROLE_MAX_TOKENS.get(role, _DEFAULT_MAX_TOKENS)
@@ -78,7 +100,7 @@ def _max_tokens_for_role(role: str | None) -> int:
 def _provider_for_role(role: str | None) -> str:
     """Return the provider to use for a given role, or the default."""
     if role:
-        override = os.environ.get(f"ROLE_PROVIDER_{role.upper()}")
+        override = _role_env(f"ROLE_PROVIDER_{role.upper()}")
         if override:
             return override.lower()
     return settings.llm_provider.lower()
@@ -87,7 +109,7 @@ def _provider_for_role(role: str | None) -> str:
 def _model_for_role(role: str | None) -> str | None:
     """Return a per-role model override from ROLE_MODEL_<ROLE>, or None."""
     if role:
-        return os.environ.get(f"ROLE_MODEL_{role.upper()}")
+        return _role_env(f"ROLE_MODEL_{role.upper()}")
     return None
 
 
