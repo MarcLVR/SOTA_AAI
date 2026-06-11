@@ -120,7 +120,13 @@ def run_ragas_eval(dataset: list[dict], output_path: str | None = None) -> dict:
 
     try:
         result = evaluate(hf_dataset, metrics=metrics, llm=judge_llm, embeddings=judge_emb)
-        scores = {k: float(v) for k, v in result.items() if isinstance(v, (int, float))}
+        # ragas 0.4.x returns an EvaluationResult (not a dict); aggregate the per-sample
+        # metric columns from its DataFrame, ignoring NaNs.
+        df = result.to_pandas()
+        scores = {
+            m.name: round(float(df[m.name].mean(skipna=True)), 4)
+            for m in metrics if m.name in df.columns
+        }
     except Exception as e:
         logger.error(f"RAGAS evaluation failed: {e}")
         return {}
