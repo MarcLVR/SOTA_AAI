@@ -12,5 +12,3 @@ data/
 *.log
 .pytest_cache/
 notebooks/
-docker-compose.yml
-docker-entrypoint.sh

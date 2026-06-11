@@ -1,0 +1,55 @@
+# One-command start:  docker compose up
+#
+# Brings up the app + Postgres. The LangGraph checkpointer switches to Postgres
+# automatically because POSTGRES_URI is set here (SQLite remains the no-docker
+# default when you run `python main.py` directly).
+#
+# Ollama runs in HOST mode (recommended — uses your host GPU): the app reaches it
+# via host.docker.internal. The host Ollama must listen on 0.0.0.0 and allow the
+# Docker bridge — see the README "Run with Docker" troubleshooting.
+#
+# Using a cloud LLM (e.g. Anthropic) instead? Just set LLM_PROVIDER + the API key
+# in .env; the host.docker.internal wiring is harmless and unused.
+
+services:
+  app:
+    build: .
+    env_file:
+      - .env
+    environment:
+      # Reach host-mode Ollama (overrides the app's localhost:11434 default).
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # Use the Postgres checkpointer (service name `postgres` on the compose network).
+      POSTGRES_URI: postgresql://app:app_pw@postgres:5432/app
+    extra_hosts:
+      # Lets the container resolve the host (for host-mode Ollama) on Linux/WSL.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Persist chroma + mem0 across container restarts (checkpoints live in Postgres).
+      - app_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "7860:7860"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app_pw
+      POSTGRES_DB: app
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  app_data:
+  pg_data:
