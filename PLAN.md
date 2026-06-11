@@ -151,7 +151,18 @@ User chose the most-SOTA option that stays operationally reliable. Implementing 
 
 # Phase 2 — Deferred roadmap implementation (June 2026)
 
-> Status: **Implementation plan — GATE. Awaiting approval before any code is written.**
+> Status: **All four phases implemented, verified, committed, and pushed.**
+> - Phase 1 — SummarizationMiddleware on the 4 specialists (critic keeps node-level trim). ✅
+> - Phase 2 — opt-in plan-and-execute planner + parallel `Send` fan-out + fan-in aggregator; planner
+>   evals added; HITL interrupt/resume verified to not double-run completed branches. ✅
+> - Phase 3 — pluggable episodic backend (Mem0 default, LangMem opt-in with consolidation) + migration
+>   script; LangMem install compat confirmed. ✅
+> - Phase 4 — Docker Compose + optional Postgres checkpointer; verified end-to-end on a live daemon
+>   (PostgresSaver active, tables created, query persisted 16 checkpoint rows). ✅
+> - Follow-up full-project verification also fixed three pre-existing defects (python_repl matplotlib
+>   preamble, per-role `.env` overrides, RAGAS runnability) and deferred the ragas collections-API
+>   migration with a documented TODO.
+>
 > APIs below were re-verified against the installed venv (langchain 1.3.2, langgraph 1.2.2,
 > langchain-core 1.4.0, langgraph-checkpoint 4.1.1) and official docs in June 2026 — not training
 > data. Where a fact was confirmed by live introspection/execution it is marked **[verified]**.
