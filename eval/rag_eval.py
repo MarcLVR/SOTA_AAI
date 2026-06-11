@@ -88,6 +88,10 @@ def run_ragas_eval(dataset: list[dict], output_path: str | None = None) -> dict:
         from eval._ragas_compat import patch_ragas_vertexai
         patch_ragas_vertexai()
         from ragas import evaluate  # type: ignore
+        # TODO(ragas-v1.0): these are deprecated in favour of ragas.metrics.collections,
+        # but that API needs a provider-specific instructor LLM (not LangchainLLMWrapper)
+        # and a per-sample .score() runner instead of evaluate(). Deferred until we bump
+        # ragas toward v1.0 — the legacy path works on 0.4.x and stays provider-agnostic.
         from ragas.metrics import (  # type: ignore
             faithfulness,
             answer_relevancy,
