@@ -83,6 +83,10 @@ def run_ragas_eval(dataset: list[dict], output_path: str | None = None) -> dict:
         Dict of metric_name → score.
     """
     try:
+        # ragas 0.4.x hard-imports a Vertex submodule removed in langchain-community
+        # 0.4.x; shim it before importing ragas (project never uses Vertex AI).
+        from eval._ragas_compat import patch_ragas_vertexai
+        patch_ragas_vertexai()
         from ragas import evaluate  # type: ignore
         from ragas.metrics import (  # type: ignore
             faithfulness,
@@ -91,8 +95,10 @@ def run_ragas_eval(dataset: list[dict], output_path: str | None = None) -> dict:
             context_precision,
         )
         from datasets import Dataset  # type: ignore
+        from ragas.llms import LangchainLLMWrapper  # type: ignore
+        from ragas.embeddings import LangchainEmbeddingsWrapper  # type: ignore
     except ImportError as e:
-        logger.error(f"RAGAS not installed: {e}. Run: pip install ragas datasets")
+        logger.error(f"RAGAS unavailable ({e}). Install with: pip install ragas datasets")
         return {}
 
     # RAGAS expects a HuggingFace Dataset
@@ -103,10 +109,17 @@ def run_ragas_eval(dataset: list[dict], output_path: str | None = None) -> dict:
     if any(row.get("ground_truth") for row in dataset):
         metrics += [context_recall, context_precision]
 
+    # Judge with the project's configured LLM + local embeddings instead of RAGAS's
+    # OpenAI defaults — so the eval runs on the same stack as the app (no OpenAI key).
+    from agents import get_llm
+    from memory.vector_store import get_embeddings
+    judge_llm = LangchainLLMWrapper(get_llm())
+    judge_emb = LangchainEmbeddingsWrapper(get_embeddings())
+
     logger.info(f"Running RAGAS on {len(dataset)} samples with {len(metrics)} metrics…")
 
     try:
-        result = evaluate(hf_dataset, metrics=metrics)
+        result = evaluate(hf_dataset, metrics=metrics, llm=judge_llm, embeddings=judge_emb)
         scores = {k: float(v) for k, v in result.items() if isinstance(v, (int, float))}
     except Exception as e:
         logger.error(f"RAGAS evaluation failed: {e}")
