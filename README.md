@@ -24,16 +24,18 @@ The multi-agent chat then lets you ask questions, get remediation advice, and ru
 - Provider-agnostic LLMs (any LangChain provider via `.env`)
 - Fully-local, no-API-key path (Ollama)
 - Supervisor-to-specialist routing (researcher / coder / general / auditor)
+- Plan-and-execute planner with parallel specialist fan-out (opt-in)
 - Reflexion critic (opt-in) with a small-model-safe fallback
 - Retry and backoff around every LLM call
-- Context compaction for long and resumed threads
+- Declarative context compaction (SummarizationMiddleware) for long and resumed threads
 - Agentic RAG (relevance grading, query rewrite, structured citations)
-- Episodic memory (Mem0)
+- Episodic memory with a pluggable backend (Mem0 default, LangMem opt-in consolidation)
 - Human-in-the-loop approval gate
 - RBAC and sliding-window rate limiting
 - Encoding-aware prompt-injection detection and PII redaction
 - MCP tools (stdio and HTTP/SSE), with per-server isolation
-- Evals: routing, end-to-end, trajectory/tool-call, and RAGAS
+- Evals: routing, end-to-end, trajectory/tool-call, planner, and RAGAS
+- One-command Docker Compose stack with an optional Postgres checkpointer
 
 ---
 
@@ -119,7 +121,7 @@ When the critic is disabled (the default), specialists go straight to `hitl`.
 |---|---|---|
 | `guardrail_in` | function | Resolves role/identity, enforces the rate limit, runs prompt-injection detection (including base64/escape/zero-width decoding) and PII redaction. On block or limit it short-circuits to `END`. |
 | `supervisor` | structured-output router | Reads the conversation and emits `SupervisorDecision{next, reasoning}` (Pydantic). Hard-stops at `MAX_SUPERVISOR_ROUNDS`. Downgrades the chosen agent if the caller's role forbids it. |
-| `researcher` / `coder` / `general` / `auditor` | `langchain.agents.create_agent` | ReAct specialists with fixed tool sets and memory tools. Input history is compacted first; the LLM call is retry-wrapped. (Migrated off the deprecated `langgraph.prebuilt.create_react_agent`.) |
+| `researcher` / `coder` / `general` / `auditor` | `langchain.agents.create_agent` | ReAct specialists with fixed tool sets and memory tools. History is compacted declaratively by a `SummarizationMiddleware` attached to each agent; the LLM call is retry-wrapped. (Migrated off the deprecated `langgraph.prebuilt.create_react_agent`.) |
 | `critic` | structured-output scorer | Reflexion: scores the last answer 0 to 1; routes back for revision if below 0.70 (capped at 2 revisions). Off by default. |
 | `hitl` | `interrupt()` gate | Optional. Pauses the graph to disk via the checkpointer; the UI shows the answer for approval and resumes with the human's decision. |
 
@@ -136,9 +138,27 @@ A single `AgentState` TypedDict flows through every node. `messages` uses LangGr
 
 ### Design rationale
 
-- Supervisor, not swarm. A central router gives one auditable decision point, deterministic role-based permission enforcement, and a hard round cap — easier to reason about and secure than peer-to-peer handoff for this workload. (Parallel fan-out and a plan-and-execute planner are on the [roadmap](#roadmap); they were deliberately deferred to avoid destabilizing the topology, HITL, and checkpointing.)
+- Supervisor, not swarm. A central router gives one auditable decision point, deterministic role-based permission enforcement, and a hard round cap — easier to reason about and secure than peer-to-peer handoff for this workload. An opt-in plan-and-execute planner (below) adds decomposition and parallel fan-out without disturbing this default topology.
 - Reflexion critic (opt-in). Verbal self-critique (Shinn et al., 2023) catches incomplete or ungrounded answers. It costs one extra LLM call per turn, so it is off by default and gated behind `CRITIC_ENABLED`. The critic is hardened for small and local models: if structured output fails it retries, then scrapes a score from free text, and only as a last resort passes through at threshold — never the misleading "perfect score" that would silently hide a failure.
-- HITL via `interrupt()`. Real human approval needs durable pause and resume, not a blocking prompt. LangGraph's `interrupt()` serializes the graph to the SQLite checkpoint; the UI resumes it later by `thread_id`.
+- HITL via `interrupt()`. Real human approval needs durable pause and resume, not a blocking prompt. LangGraph's `interrupt()` serializes the graph to the checkpoint; the UI resumes it later by `thread_id`.
+
+## Plan-and-execute planner (`graph/planner.py`, opt-in)
+
+Off by default; set `PLANNER_ENABLED=true` to route `guardrail_in` into a planner subgraph instead of the supervisor (the supervisor stays registered but unreachable, the same pattern as the disabled critic). It is wired in at **build time**, so the shipped default topology is byte-for-byte unchanged.
+
+```
+planner → plan_dispatch ──Send──▶ fanout_worker (×N, parallel)
+              ▲                          │
+              │                          ▼
+           replan ◀──────────────── plan_aggregate (fan-in, runs once)
+              │
+        (complete) → critic / hitl
+```
+
+- The **planner** emits a structured `Plan` of `Step`s; steps sharing a `group` are independent and fan out in parallel via the LangGraph `Send` API, while ascending groups run sequentially.
+- Parallel workers write **only reducer-protected state** (`step_results` with an `operator.add` reducer, plus `messages`); the single fan-in **aggregate** node owns all scalar fields — concurrent scalar writes would otherwise raise `InvalidUpdateError`.
+- The **replan** node finishes with a synthesized answer or revises the remaining plan on step failure (capped by `PLANNER_MAX_REPLANS`).
+- Composes with the existing critic and HITL: the completed plan flows through the critic (when enabled) then `hitl`. An `interrupt()` mid-fan-out resumes from the checkpointer **without re-running completed branches** (verified against LangGraph 1.2.2), so specialists never double-execute.
 
 ## Provider abstraction (`agents/llm.py`)
 
@@ -162,14 +182,14 @@ Embeddings (RAG and Mem0) always run locally and ignore `LLM_PROVIDER`.
 ## Resilience and long-thread safety
 
 - Retries (`agents/resilience.py`). Every LLM `.invoke` — supervisor, critic, executor, and the specialist ReAct turns — is wrapped in bounded exponential-backoff retries (tenacity). Transient rate-limits, timeouts, and the "model is loading" stalls common with local Ollama no longer abort a turn. Tunable via `LLM_MAX_RETRIES` and `LLM_RETRY_MAX_WAIT`.
-- Context compaction (`graph/compaction.py`). Threads resume by `thread_id`, so history grows unbounded and would eventually overflow the context window. Before each specialist or critic call, history is trimmed to a bounded recent window using `trim_messages(start_on="human")` — which never orphans a tool-call/tool-result pair — and an elision note is prepended. Optionally (`CONTEXT_SUMMARIZE=true`) the dropped span is condensed in one cheap LLM call.
+- Context compaction. Threads resume by `thread_id`, so history grows unbounded and would eventually overflow the context window. Each specialist is a `create_agent` agent with a `SummarizationMiddleware` (`agents/middleware.py`) that fires once history crosses `CONTEXT_MAX_MESSAGES`, replacing older turns with a summary while keeping the last `CONTEXT_KEEP_LAST` verbatim (message-count thresholds, since the local Ollama path has no token-profile for fraction triggers). The critic is a plain structured-output call rather than an agent, so it keeps the node-level `graph/compaction.py` trim (`trim_messages(start_on="human")`, which never orphans a tool-call/tool-result pair; optional `CONTEXT_SUMMARIZE=true` condenses the dropped span in one LLM call).
 
 ## Memory tiers
 
 | Tier | Backend | Used for |
 |---|---|---|
 | Semantic / RAG (`memory/vector_store.py`) | ChromaDB + `bge-small-en-v1.5` (local CPU, no service) | Uploaded documents and notes. Agentic retrieval pipeline: fetch candidates, then cross-encoder rerank (`bge-reranker-base`, lazy, graceful fallback), then LLM relevance grade (CRAG-style, off-topic chunks dropped); on an "insufficient" verdict it rewrites the query and retries once, and returns structured citations (source file + chunk offset + score). Degrades to plain top-k on any failure. Toggle with `RAG_RERANK` / `RAG_GRADE` / `RAG_QUERY_REWRITE`. |
-| Episodic (`memory/episodic.py`) | Mem0 + local Ollama embeddings | Cross-session facts. `remember` and `recall` are tools injected into every agent. |
+| Episodic (`memory/episodic.py`) | Pluggable: **Mem0** (default) or **LangMem** (opt-in) | Cross-session facts. `remember` and `recall` are tools injected into every agent. The backend is selected by `EPISODIC_BACKEND` behind a stable interface, so callers never change. Mem0 runs fully local (Ollama LLM + embeddings + Chroma), persistent. `EPISODIC_BACKEND=langmem` (after `pip install langmem`) adds background consolidation (dedup/merge/update) and procedural memory over a LangGraph `BaseStore`; its local store is process-lifetime (persistent LangMem needs a Postgres/pgvector store), so Mem0 stays the persistent default. `scripts/migrate_episodic.py` carries facts across. |
 
 ## Guardrails and permissions
 
@@ -188,9 +208,10 @@ Idempotent, network-bound tools (`web_search`) are wrapped in a small TTL+LRU ca
 | Routing | Does the supervisor pick the right specialist? | Compares `SupervisorDecision.next` to expected, per case. |
 | End-to-end | Is the final answer right? | Keyword presence/absence over the full-graph response. |
 | Trajectory / tool-call | Did the agent follow the right process? | Streams the graph with `subgraphs=True` to capture the node sequence and the tools actually called, then scores tool-call correctness with `agentevals` (subset trajectory-match) — catching agents that guess correctly without using the required tool. |
+| Planner (`--planner`) | Does the opt-in planner plan, adhere, and fan in correctly? | Forces `PLANNER_ENABLED`, then checks plan quality (expected specialists covered), step adherence (one worker per planned step, planner→dispatch→worker→aggregate→replan order), and fan-in correctness (aggregate runs once, all results merged, plan drained, final answer present). |
 | RAGAS (`rag_eval.py`) | Retrieval quality | Faithfulness, answer relevancy, context recall/precision. |
 
-Persistence: a SQLite checkpointer at `data/chroma_db/checkpoints.sqlite` — conversations resume by `thread_id`. Observability: Langfuse callbacks when `LANGFUSE_PUBLIC_KEY` is set, otherwise a local console tracer.
+Persistence: a SQLite checkpointer at `data/chroma_db/checkpoints.sqlite` by default — conversations resume by `thread_id`. When `POSTGRES_URI` is set (e.g. under Docker Compose) the checkpointer switches to a long-lived Postgres `PostgresSaver` instead; SQLite remains the no-docker default. Observability: Langfuse callbacks when `LANGFUSE_PUBLIC_KEY` is set, otherwise a local console tracer.
 
 ---
 
@@ -472,15 +493,16 @@ python -m eval.rag_eval                  # RAGAS metrics
 │   └── resilience.py         # retry/backoff around every LLM .invoke
 ├── graph/                    # LangGraph state machine
 │   ├── state.py              # AgentState TypedDict
-│   ├── workflow.py           # nodes, edges, checkpointer
-│   └── compaction.py         # long-thread context compaction
+│   ├── workflow.py           # nodes, edges, SQLite/Postgres checkpointer
+│   ├── planner.py            # opt-in plan-and-execute + parallel fan-out
+│   └── compaction.py         # node-level context trim (critic; specialists use middleware)
 ├── domain/                   # audit engine — zero LLM calls
 │   ├── knowledge.py          # thresholds, retired standards, required sections
 │   ├── run_audit.py          # programmatic API + CLI
 │   ├── tools/                # crawler, extractor, staleness, standards, governance
 │   └── demo_corpus/          # 42-file synthetic corpus generator
 ├── standards/                # governance docs (RAG + semantic layer)
-├── memory/                   # vector_store.py (agentic RAG) + episodic.py (Mem0)
+├── memory/                   # vector_store.py (agentic RAG) + episodic.py (Mem0/LangMem)
 ├── guardrails/               # injection/PII guards, RBAC permissions, MCP elicitation
 ├── tools/                    # web_search, python_repl, file tools, audit tools, cache.py
 ├── mcp_servers/              # MCP loader (stdio + HTTP/SSE, per-server isolation)
@@ -506,17 +528,17 @@ Recently shipped:
 - [x] Tool-result caching
 - [x] Encoding-aware prompt-injection detection
 - [x] Semantic compliance layer, Telegram notifier, Analytics/Postgres, RBAC + rate limiting, MCP HTTP transport
+- [x] Declarative compaction via `SummarizationMiddleware` on the specialists (critic keeps node-level trim)
+- [x] Plan-and-execute planner with parallel specialist fan-out + fan-in aggregator (opt-in, `PLANNER_ENABLED`)
+- [x] Pluggable episodic memory — Mem0 default, LangMem opt-in with background consolidation
+- [x] Docker Compose (one-command start) with an optional Postgres checkpointer
 
 Planned, or evaluated and deferred (see `PLAN.md` for the June-2026 currency audit rationale):
 
-- [ ] `create_agent` + `SummarizationMiddleware` to replace the hand-rolled compaction node
-- [ ] Memory consolidation via Zep (temporal KG) or LangMem (native LangGraph) — Mem0 today
-- [ ] Plan-and-execute planner node (opt-in via env)
-- [ ] Parallel specialist fan-out with a fan-in aggregator
+- [ ] LangMem promoted to the default + a persistent (Postgres/pgvector) `BaseStore` for it
 - [ ] Semantic tool routing (`langgraph-bigtool`) — only worthwhile at dozens or more of tools
 - [ ] A2A protocol endpoint for cross-org agent interop (complements MCP) — not needed for a single app
 - [ ] deepagents harness (planning tool + subagents + virtual-FS) — overkill for this topology today
-- [ ] Docker Compose (one-command start with Postgres)
 - [ ] PDF report generation, streaming specialist output, Playwright browser agent
 
 ---
