@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     critic_revision_threshold: float = 0.70   # below this score → revise
     critic_max_revisions: int = 2
 
+    # ── Episodic memory ────────────────────────────────────────────────────────
+    # mem0 (default, persistent local) | langmem (opt-in, consolidation; pip install langmem)
+    episodic_backend: str = "mem0"
+
     # ── RAG ───────────────────────────────────────────────────────────────────
     chroma_persist_dir: str = "./data/chroma_db"
     # bge-small-en-v1.5: 384-dim, CPU-only, no service dependency, stronger than

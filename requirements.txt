@@ -23,7 +23,9 @@ pypdf>=4.0.0                          # PDF ingestion
 unstructured[md]>=0.15.0              # markdown / text ingestion
 
 # ── Episodic memory ───────────────────────────────────────────────────────────
-mem0ai>=0.1.0                         # Mem0 local mode (no API key required)
+mem0ai>=0.1.0                         # Mem0 local mode (no API key required) — default backend
+# langmem>=0.0.30                     # opt-in backend (EPISODIC_BACKEND=langmem): LangGraph-native
+#                                     #   consolidation; verified compatible with the 1.x stack.
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
 ddgs>=9.0.0                   # free web search
