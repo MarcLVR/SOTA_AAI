@@ -71,12 +71,20 @@ def python_repl(code: str, timeout: int = 30) -> str:
     """
     logger.info(f"[python_repl] executing ({len(code)} chars, timeout={timeout}s)")
 
-    # Auto-inject matplotlib non-interactive backend to avoid GUI errors
-    preamble = textwrap.dedent("""
-        import matplotlib
-        matplotlib.use('Agg')
-    """)
-    full_code = preamble + "\n" + code
+    # Only set a non-interactive matplotlib backend when the snippet actually uses
+    # matplotlib, and never let a missing install break execution. Unconditionally
+    # importing matplotlib would make *every* call fail when it isn't installed.
+    if "matplotlib" in code or "pyplot" in code or "plt" in code:
+        preamble = textwrap.dedent("""
+            try:
+                import matplotlib
+                matplotlib.use('Agg')
+            except ImportError:
+                pass
+        """)
+        full_code = preamble + "\n" + code
+    else:
+        full_code = code
 
     stdout, stderr = _run_subprocess(full_code, timeout=timeout)
 
